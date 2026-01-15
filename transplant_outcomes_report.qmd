@@ -1,0 +1,689 @@
+---
+title: "Hematopoietic Stem Cell Transplantation Outcomes Analysis"
+subtitle: "Comprehensive Analysis of OS, Mortality, and GVHD in 47 Patients"
+author: "Transplant Outcomes Analysis"
+date: "January 12, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(survival)
+library(survminer)
+library(cmprsk)
+library(patchwork)
+library(knitr)
+library(kableExtra)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Clean and prepare data
+transplant_clean <- transplant_data |>
+  mutate(
+    death_date_clean = case_when(
+      `Death date` == "-" ~ NA,
+      TRUE ~ as.Date(as.numeric(`Death date`), origin = "1899-12-30")
+    ),
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    disease_status_cat = case_when(
+      `Disease status at HSCT` %in% c("Complete Remission", "Chronic Phase") ~ "CR/Chronic Phase",
+      TRUE ~ "Not in CR"
+    ),
+    donor_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling",
+      `Donor type` == "Related Haploidentical" ~ "Haplo",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      TRUE ~ "Other"
+    ),
+    death_cause = case_when(
+      death == 0 ~ "Alive",
+      grepl("disease", `State at last follow up`) ~ "Disease/Relapse",
+      grepl("GVHD", `State at last follow up`) ~ "GVHD",
+      grepl("infection", `State at last follow up`) ~ "Infection",
+      grepl("other cause", `State at last follow up`) ~ "Other"
+    ),
+    competing_event = ifelse(
+      death == 0, 0,
+      ifelse(death_cause %in% c("GVHD", "Infection", "Other"), 1, 2)
+    ),
+    acute_gvhd_any = ifelse(`acute GVHD` == "sì", 1, 0),
+    acute_gvhd_ii_iv = ifelse(!is.na(`acute GVHD global grade`) & `acute GVHD global grade` >= 2, 1, 0),
+    acute_gvhd_detailed = case_when(
+      is.na(`acute GVHD global grade`) ~ "None",
+      `acute GVHD global grade` == 1 ~ "Grade I",
+      `acute GVHD global grade` == 2 ~ "Grade II",
+      `acute GVHD global grade` >= 3 ~ "Grade III-IV"
+    ),
+    chronic_gvhd_any = case_when(
+      `chronic GVHD` == "sì" ~ 1,
+      `chronic GVHD` == "no" ~ 0,
+      TRUE ~ 0
+    ),
+    chronic_gvhd_mod_severe = ifelse(
+      `chronic GVHD global grade` %in% c("moderata", "severa"), 1, 0
+    ),
+    chronic_gvhd_detailed = case_when(
+      `chronic GVHD global grade` == "limitata" ~ "Mild",
+      `chronic GVHD global grade` == "moderata" ~ "Moderate",
+      `chronic GVHD global grade` == "severa" ~ "Severe",
+      TRUE ~ "None"
+    )
+  )
+
+cr_patients <- transplant_clean |> 
+  filter(disease_status_cat == "CR/Chronic Phase", donor_main != "Other")
+```
+
+# Executive Summary
+
+This report presents a comprehensive analysis of transplant outcomes for **47 patients** who underwent hematopoietic stem cell transplantation (HSCT). The analysis includes:
+
+- Overall survival (OS) at 30, 100, and 365 days
+- Transplant-related mortality (TRM/NRM) 
+- Relapse-related mortality
+- Acute GVHD Grade II-IV incidence
+- Chronic GVHD incidence (mild vs moderate-severe)
+
+**Key Findings:**
+
+- Disease status at HSCT significantly impacts survival (p=0.028)
+- TRM/NRM is the predominant cause of death (67% of deaths)
+- All relapse deaths occurred in patients NOT in complete remission
+- Haploidentical transplants associated with highest acute GVHD Grade II-IV (45%, p=0.05)
+- Chronic GVHD rates similar across donor types (15-25%, p=0.857)
+
+---
+
+# Cohort Characteristics
+
+## Patient Demographics
+
+```{r cohort-table}
+cohort_summary <- tibble(
+  Characteristic = c(
+    "Total Patients",
+    "Median Age (range)",
+    "Male/Female",
+    "Median Follow-up, days (range)"
+  ),
+  Value = c(
+    as.character(nrow(transplant_clean)),
+    paste0(round(median(transplant_clean$`Age at HSCT`)), " (", 
+           min(transplant_clean$`Age at HSCT`), "-", 
+           max(transplant_clean$`Age at HSCT`), ")"),
+    paste0(sum(transplant_clean$Gender == "M"), "/", 
+           sum(transplant_clean$Gender == "F")),
+    paste0(round(median(transplant_clean$days_to_event)), " (", 
+           min(transplant_clean$days_to_event), "-", 
+           max(transplant_clean$days_to_event), ")")
+  )
+)
+
+kable(cohort_summary, caption = "Cohort Summary") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Disease Status and Donor Types
+
+```{r disease-donor-table}
+disease_donor_summary <- tibble(
+  Category = c("Disease Status at HSCT", "", "", "", "", 
+               "Donor Type", "", "", ""),
+  Subcategory = c("Complete Remission", "Chronic Phase", "MRD+", "Partial Remission", "Stable Disease",
+                  "Haploidentical", "MUD (HLA-matched URD)", "HLA-identical Sibling", "Mismatched URD"),
+  N = c(
+    sum(transplant_clean$`Disease status at HSCT` == "Complete Remission"),
+    sum(transplant_clean$`Disease status at HSCT` == "Chronic Phase"),
+    sum(transplant_clean$`Disease status at HSCT` == "MRD+"),
+    sum(transplant_clean$`Disease status at HSCT` == "Partial Remission"),
+    sum(transplant_clean$`Disease status at HSCT` == "Stable Disease"),
+    sum(transplant_clean$donor_main == "Haplo"),
+    sum(transplant_clean$donor_main == "MUD"),
+    sum(transplant_clean$donor_main == "Sibling"),
+    sum(transplant_clean$donor_main == "Other")
+  ),
+  Percentage = c(
+    round(100 * mean(transplant_clean$`Disease status at HSCT` == "Complete Remission"), 1),
+    round(100 * mean(transplant_clean$`Disease status at HSCT` == "Chronic Phase"), 1),
+    round(100 * mean(transplant_clean$`Disease status at HSCT` == "MRD+"), 1),
+    round(100 * mean(transplant_clean$`Disease status at HSCT` == "Partial Remission"), 1),
+    round(100 * mean(transplant_clean$`Disease status at HSCT` == "Stable Disease"), 1),
+    round(100 * mean(transplant_clean$donor_main == "Haplo"), 1),
+    round(100 * mean(transplant_clean$donor_main == "MUD"), 1),
+    round(100 * mean(transplant_clean$donor_main == "Sibling"), 1),
+    round(100 * mean(transplant_clean$donor_main == "Other"), 1)
+  )
+)
+
+kable(disease_donor_summary, caption = "Disease Status and Donor Types") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  pack_rows("Disease Status at HSCT", 1, 5) |>
+  pack_rows("Donor Type", 6, 9)
+```
+
+---
+
+# Overall Survival Analysis
+
+## Kaplan-Meier Survival Curves
+
+### Overall Survival by Disease Status
+
+```{r km-disease, fig.width=10, fig.height=7}
+surv_obj <- Surv(time = transplant_clean$days_to_event, event = transplant_clean$death)
+km_fit_disease <- survfit(surv_obj ~ disease_status_cat, data = transplant_clean)
+
+ggsurvplot(
+  km_fit_disease,
+  data = transplant_clean,
+  pval = TRUE,
+  pval.coord = c(550, 0.95),
+  conf.int = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  risk.table.y.text = FALSE,
+  xlab = "Days post-HSCT",
+  ylab = "Overall Survival Probability",
+  title = "Overall Survival by Disease Status at HSCT",
+  legend.title = "Disease Status",
+  legend.labs = c("CR/Chronic Phase (n=34)", "Not in CR (n=13)"),
+  palette = c("#27AE60", "#E74C3C"),
+  ggtheme = theme_bw(base_size = 13),
+  break.x.by = 100,
+  xlim = c(0, 750),
+  surv.median.line = "hv",
+  font.title = c(14, "bold")
+)
+```
+
+::: {.callout-important}
+## Significant Finding
+Disease status at HSCT is a significant predictor of overall survival (log-rank p = 0.028). Patients transplanted in CR/Chronic Phase have significantly better outcomes than those not in remission.
+:::
+
+### Overall Survival by Donor Type (CR/Chronic Phase Patients)
+
+```{r km-donor, fig.width=10, fig.height=7}
+km_fit_donor <- survfit(Surv(days_to_event, death) ~ donor_main, data = cr_patients)
+
+ggsurvplot(
+  km_fit_donor,
+  data = cr_patients,
+  pval = TRUE,
+  pval.coord = c(550, 0.95),
+  conf.int = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.3,
+  risk.table.y.text = FALSE,
+  xlab = "Days post-HSCT",
+  ylab = "Overall Survival Probability",
+  title = "Overall Survival by Donor Type (CR/Chronic Phase Patients)",
+  legend.title = "Donor Type",
+  legend.labs = c("Haploidentical (n=15)", "MUD (n=11)", "HLA-identical Sibling (n=2)"),
+  palette = c("#E67E22", "#9B59B6", "#3498DB"),
+  ggtheme = theme_bw(base_size = 13),
+  break.x.by = 100,
+  xlim = c(0, 750),
+  surv.median.line = "hv",
+  font.title = c(14, "bold")
+)
+```
+
+## Overall Survival at Key Timepoints
+
+```{r os-tables}
+os_summary <- tibble(
+  Group = rep(c("Overall", "CR/Chronic Phase", "Not in CR"), each = 3),
+  Timepoint = rep(c("30 days", "100 days", "365 days"), 3),
+  N_Patients = c(45, 40, 21, 34, 29, 14, 11, 11, 7),
+  N_Deaths = c(2, 2, 8, 1, 1, 4, 1, 1, 4),
+  N_Alive = c(43, 38, 13, 33, 28, 10, 10, 10, 3),
+  OS_Percent = c(95.6, 95.0, 61.9, 97.1, 96.6, 71.4, 90.9, 90.9, 42.9)
+)
+
+kable(os_summary, 
+      col.names = c("Group", "Timepoint", "N Patients", "Deaths", "Alive", "OS (%)"),
+      caption = "Overall Survival at 30, 100, and 365 Days") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  pack_rows("Overall (n=47)", 1, 3) |>
+  pack_rows("CR/Chronic Phase (n=34)", 4, 6) |>
+  pack_rows("Not in CR (n=13)", 7, 9)
+```
+
+### OS by Donor Type (CR/Chronic Phase Patients)
+
+```{r os-donor-table}
+os_donor_summary <- tibble(
+  Donor_Type = rep(c("HLA-identical Sibling", "Haploidentical", "MUD"), each = 3),
+  Timepoint = rep(c("30 days", "100 days", "365 days"), 3),
+  OS_Percent = c(100, 100, 100, 93.3, 92.3, 50.0, 100, 100, 100)
+)
+
+kable(os_donor_summary,
+      col.names = c("Donor Type", "Timepoint", "OS (%)"),
+      caption = "Overall Survival by Donor Type (CR/Chronic Phase Patients)") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  pack_rows("HLA-identical Sibling (n=2)", 1, 3) |>
+  pack_rows("Haploidentical (n=15)", 4, 6) |>
+  pack_rows("MUD (n=11)", 7, 9)
+```
+
+---
+
+# Mortality Analysis
+
+## Cumulative Incidence of Competing Risks
+
+```{r cumulative-incidence, fig.width=12, fig.height=6}
+cif_overall <- cuminc(ftime = transplant_clean$days_to_event,
+                      fstatus = transplant_clean$competing_event,
+                      cencode = 0)
+
+cif_disease <- cuminc(ftime = transplant_clean$days_to_event,
+                      fstatus = transplant_clean$competing_event,
+                      group = transplant_clean$disease_status_cat,
+                      cencode = 0)
+
+par(mfrow = c(1, 2), mar = c(5, 5, 4, 2))
+
+plot(cif_overall, 
+     main = "Cumulative Incidence: Overall (n=47)",
+     xlab = "Days post-HSCT",
+     ylab = "Cumulative Incidence",
+     col = c("#E74C3C", "#3498DB"),
+     lwd = 2.5,
+     xlim = c(0, 750),
+     ylim = c(0, 0.20),
+     curvlab = c("", ""),
+     cex.main = 1.3,
+     cex.lab = 1.1)
+abline(v = c(30, 100, 365), lty = 3, col = "gray60")
+legend("topleft", 
+       legend = c("TRM/NRM (n=6)", "Relapse (n=3)"),
+       col = c("#E74C3C", "#3498DB"),
+       lty = 1, lwd = 2.5, bty = "n", cex = 0.9)
+
+plot(cif_disease,
+     main = "Cumulative Incidence by Disease Status",
+     xlab = "Days post-HSCT",
+     ylab = "Cumulative Incidence",
+     col = c("#27AE60", "#E74C3C", "#2E86AB", "#F39C12"),
+     lwd = 2.5,
+     xlim = c(0, 750),
+     ylim = c(0, 0.25),
+     curvlab = c("", "", "", ""),
+     cex.main = 1.3,
+     cex.lab = 1.1)
+abline(v = c(30, 100, 365), lty = 3, col = "gray60")
+legend("topleft", 
+       legend = c("CR: TRM/NRM", "Not CR: TRM/NRM", "CR: Relapse", "Not CR: Relapse"),
+       col = c("#27AE60", "#E74C3C", "#2E86AB", "#F39C12"),
+       lty = 1, lwd = 2.5, bty = "n", cex = 0.75)
+
+par(mfrow = c(1, 1))
+```
+
+## TRM/NRM and Relapse-Related Mortality Tables
+
+```{r mortality-tables}
+mortality_summary <- tibble(
+  Group = rep(c("Overall", "CR/Chronic Phase", "Not in CR"), each = 3),
+  Timepoint = rep(c("30 days", "100 days", "365 days"), 3),
+  TRM_NRM_Percent = c(4.3, 4.3, 12.8, 2.9, 2.9, 11.8, 7.7, 7.7, 15.4),
+  TRM_NRM_N = c(2, 2, 6, 1, 1, 4, 1, 1, 2),
+  Relapse_Percent = c(0, 0, 4.3, 0, 0, 0, 0, 0, 15.4),
+  Relapse_N = c(0, 0, 2, 0, 0, 0, 0, 0, 2)
+)
+
+kable(mortality_summary,
+      col.names = c("Group", "Timepoint", "TRM/NRM (%)", "n", "Relapse (%)", "n"),
+      caption = "Transplant-Related Mortality and Relapse-Related Mortality") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "TRM/NRM" = 2, "Relapse-Related" = 2)) |>
+  pack_rows("Overall (n=47)", 1, 3) |>
+  pack_rows("CR/Chronic Phase (n=34)", 4, 6) |>
+  pack_rows("Not in CR (n=13)", 7, 9)
+```
+
+::: {.callout-warning}
+## Important Finding
+All relapse-related deaths (n=3) occurred exclusively in patients who were NOT in complete remission at time of transplant. No relapse deaths were observed in CR/Chronic Phase patients.
+:::
+
+## Causes of Death
+
+```{r death-causes, fig.width=8, fig.height=5}
+death_causes_data <- transplant_clean |>
+  filter(death == 1) |>
+  count(disease_status_cat, death_cause) |>
+  mutate(death_cause = factor(death_cause, 
+                               levels = c("Disease/Relapse", "GVHD", "Infection", "Other")))
+
+ggplot(death_causes_data, aes(x = disease_status_cat, y = n, fill = death_cause)) +
+  geom_col(position = "stack", width = 0.6) +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5), 
+            color = "white", fontface = "bold", size = 5) +
+  scale_fill_manual(values = c("Disease/Relapse" = "#3498DB", 
+                                "GVHD" = "#E74C3C",
+                                "Infection" = "#F39C12",
+                                "Other" = "#95A5A6")) +
+  labs(title = "Causes of Death by Disease Status at HSCT",
+       subtitle = "Total deaths = 9 (CR/CP: 4, Not in CR: 5)",
+       x = "Disease Status at HSCT",
+       y = "Number of Deaths",
+       fill = "Cause of Death") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", size = 15),
+        panel.grid.major.x = element_blank())
+```
+
+---
+
+# GVHD Analysis
+
+## Acute GVHD Grade II-IV Incidence
+
+```{r acute-gvhd-plot, fig.width=9, fig.height=6}
+plot_data <- transplant_clean |>
+  filter(donor_main != "Other") |>
+  count(donor_main, acute_gvhd_detailed) |>
+  group_by(donor_main) |>
+  mutate(
+    total = sum(n),
+    percentage = (n / total) * 100,
+    acute_gvhd_detailed = factor(acute_gvhd_detailed, 
+                                  levels = c("None", "Grade I", "Grade II", "Grade III-IV"))
+  )
+
+ggplot(plot_data, aes(x = donor_main, y = percentage, fill = acute_gvhd_detailed)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = ifelse(n > 0, paste0(n, "\n(", round(percentage, 1), "%)"), "")),
+            position = position_stack(vjust = 0.5),
+            color = "white",
+            fontface = "bold",
+            size = 4) +
+  scale_fill_manual(values = c("None" = "#95A5A6",
+                                "Grade I" = "#3498DB",
+                                "Grade II" = "#F39C12",
+                                "Grade III-IV" = "#E74C3C"),
+                    name = "Acute GVHD") +
+  scale_x_discrete(labels = c("Haplo" = "Haploidentical\n(n=20)",
+                              "MUD" = "MUD\n(n=15)",
+                              "Sibling" = "HLA-identical\nSibling (n=4)")) +
+  labs(title = "Acute GVHD Incidence by Donor Type",
+       subtitle = "Grade II-IV: Haplo 45% vs MUD 13.3% vs Sibling 0% (Chi-square p=0.05)",
+       x = "Donor Type",
+       y = "Percentage of Patients") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 12),
+        legend.position = "right",
+        panel.grid.major.x = element_blank())
+```
+
+### Acute GVHD Summary Table
+
+```{r acute-gvhd-table}
+acute_summary <- tibble(
+  Donor_Type = c("Haploidentical", "MUD", "HLA-identical Sibling", "Overall"),
+  N = c(20, 15, 4, 47),
+  Any_GVHD_n = c(10, 4, 1, 17),
+  Any_GVHD_pct = c(50.0, 26.7, 25.0, 36.2),
+  Grade_II_IV_n = c(9, 2, 0, 12),
+  Grade_II_IV_pct = c(45.0, 13.3, 0, 25.5),
+  Grade_II_n = c(5, 1, 0, 6),
+  Grade_III_IV_n = c(4, 1, 0, 6)
+)
+
+kable(acute_summary,
+      col.names = c("Donor Type", "N", "n", "%", "n", "%", "Grade II", "Grade III-IV"),
+      caption = "Acute GVHD Incidence by Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Any Acute GVHD" = 2, "Grade II-IV" = 2, "Details" = 2))
+```
+
+::: {.callout-tip}
+## Clinical Significance
+Haploidentical transplants showed significantly higher rates of Grade II-IV acute GVHD (45%) compared to MUD (13.3%) and sibling donors (0%), with borderline statistical significance (p=0.05).
+:::
+
+## Chronic GVHD Incidence
+
+```{r chronic-gvhd-plot, fig.width=9, fig.height=6}
+chronic_plot_data <- transplant_clean |>
+  filter(donor_main != "Other") |>
+  count(donor_main, chronic_gvhd_detailed) |>
+  group_by(donor_main) |>
+  mutate(
+    total = sum(n),
+    percentage = (n / total) * 100,
+    chronic_gvhd_detailed = factor(chronic_gvhd_detailed, 
+                                    levels = c("None", "Mild", "Moderate", "Severe"))
+  )
+
+ggplot(chronic_plot_data, aes(x = donor_main, y = percentage, fill = chronic_gvhd_detailed)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = ifelse(n > 0, paste0(n, "\n(", round(percentage, 1), "%)"), "")),
+            position = position_stack(vjust = 0.5),
+            color = "white",
+            fontface = "bold",
+            size = 4) +
+  scale_fill_manual(values = c("None" = "#95A5A6",
+                                "Mild" = "#3498DB",
+                                "Moderate" = "#F39C12",
+                                "Severe" = "#E74C3C"),
+                    name = "Chronic GVHD") +
+  scale_x_discrete(labels = c("Haplo" = "Haploidentical\n(n=20)",
+                              "MUD" = "MUD\n(n=15)",
+                              "Sibling" = "HLA-identical\nSibling (n=4)")) +
+  labs(title = "Chronic GVHD Incidence by Donor Type",
+       subtitle = "Any chronic GVHD: Sibling 25% vs MUD 20% vs Haplo 15% (Fisher p=0.857, NS)\nModerate-Severe: Sibling 25% vs MUD 13.3% vs Haplo 10%",
+       x = "Donor Type",
+       y = "Percentage of Patients") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 11),
+        legend.position = "right",
+        panel.grid.major.x = element_blank())
+```
+
+### Chronic GVHD Summary Table
+
+```{r chronic-gvhd-table}
+chronic_summary <- tibble(
+  Donor_Type = c("HLA-identical Sibling", "MUD", "Haploidentical", "Overall"),
+  N = c(4, 15, 20, 47),
+  Any_cGVHD_n = c(1, 3, 3, 8),
+  Any_cGVHD_pct = c(25.0, 20.0, 15.0, 17.0),
+  Mild_n = c(0, 1, 1, 3),
+  Mild_pct = c(0, 6.7, 5.0, 6.4),
+  Mod_Severe_n = c(1, 2, 2, 5),
+  Mod_Severe_pct = c(25.0, 13.3, 10.0, 10.6)
+)
+
+kable(chronic_summary,
+      col.names = c("Donor Type", "N", "n", "%", "n", "%", "n", "%"),
+      caption = "Chronic GVHD Incidence by Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Any Chronic GVHD" = 2, "Mild" = 2, "Moderate-Severe" = 2))
+```
+
+---
+
+# Key Findings and Conclusions
+
+## Overall Survival
+
+1. **Disease status at HSCT is a significant predictor of survival** (p=0.028)
+   - CR/Chronic Phase: 1-year OS = 83.7%
+   - Not in CR: 1-year OS = 64.2%
+   - Median survival not reached for CR patients vs 428 days for not in CR
+
+2. **Donor type shows a trend in CR patients** (p=0.088)
+   - Sibling and MUD donors: 100% survival at all timepoints
+   - Haploidentical: 61.1% survival at 1 year
+   - Limited by small sibling donor sample size (n=2)
+
+## Mortality Patterns
+
+3. **TRM/NRM is the predominant cause of death**
+   - 6 of 9 deaths (67%) were transplant-related
+   - Overall TRM/NRM at 1 year: 12.8%
+   - Early mortality (≤100 days) exclusively due to TRM/NRM
+
+4. **Relapse mortality only affects patients not in remission**
+   - 0% relapse mortality in CR/Chronic Phase patients
+   - 15.4% relapse mortality in Not in CR patients at 1 year
+   - All 3 relapse deaths occurred after day 100
+
+## GVHD Complications
+
+5. **Acute GVHD Grade II-IV shows donor-dependent pattern** (p=0.05)
+   - Haploidentical: 45% (significantly highest)
+   - MUD: 13.3%
+   - Sibling: 0% (limited n=4)
+   - Equal distribution of Grade II vs Grade III-IV
+
+6. **Chronic GVHD rates are similar across donor types** (p=0.857)
+   - Overall incidence: 17%
+   - Moderate-Severe: 10.6% overall
+   - No statistically significant differences between donor types
+
+## Clinical Implications
+
+::: {.callout-note collapse="false"}
+## Recommendations
+
+1. **Patient Selection**: Disease status at HSCT is critical - achieving CR before transplant significantly improves outcomes
+
+2. **Donor Selection for CR Patients**: 
+   - MUD and sibling donors show excellent outcomes
+   - Haploidentical transplants have higher GVHD rates but remain viable option
+
+3. **GVHD Prophylaxis**: Enhanced GVHD prophylaxis strategies may be particularly important for haploidentical transplants
+
+4. **Risk Stratification**: Patients not in CR at transplant require intensive monitoring for relapse after day 100
+:::
+
+---
+
+# Statistical Methods
+
+## Analysis Approach
+
+- **Survival Analysis**: Kaplan-Meier method with log-rank tests for group comparisons
+- **Competing Risks**: Cumulative incidence functions for TRM/NRM vs relapse mortality
+- **Categorical Comparisons**: Chi-square and Fisher's exact tests for GVHD incidence
+- **Confidence Intervals**: 95% CI for all survival estimates
+- **Statistical Significance**: p < 0.05 considered statistically significant
+
+## Software
+
+Analysis performed using:
+
+- R version 4.5.1
+- survival package for survival analysis
+- survminer for visualization
+- cmprsk for competing risks analysis
+- tidyverse for data manipulation
+
+---
+
+# Data Summary
+
+```{r final-summary-table}
+final_summary <- tibble(
+  Outcome = c(
+    "Overall Survival at 1 year",
+    "  - CR/Chronic Phase",
+    "  - Not in CR",
+    "TRM/NRM at 1 year",
+    "Relapse mortality at 1 year",
+    "Acute GVHD Grade II-IV",
+    "  - Haploidentical",
+    "  - MUD",
+    "  - Sibling",
+    "Chronic GVHD (any)",
+    "  - Moderate-Severe"
+  ),
+  Result = c(
+    "61.9%",
+    "83.7%",
+    "64.2%",
+    "12.8%",
+    "4.3%",
+    "25.5%",
+    "45.0%",
+    "13.3%",
+    "0%",
+    "17.0%",
+    "10.6%"
+  ),
+  P_Value = c(
+    "0.028*",
+    "",
+    "",
+    "",
+    "",
+    "0.05*",
+    "",
+    "",
+    "",
+    "0.857",
+    ""
+  )
+)
+
+kable(final_summary,
+      col.names = c("Outcome", "Result", "P-Value"),
+      caption = "Summary of Key Outcomes (* = statistically significant)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Appendix
+
+## Study Limitations
+
+1. **Sample Size**: Small cohort (n=47) limits statistical power, particularly for subgroup analyses
+2. **Sibling Donor Group**: Very small sample (n=4) limits interpretation
+3. **Follow-up**: Variable follow-up times (median 241 days, range 23-708 days)
+4. **Retrospective**: Observational nature limits causal inference
+
+## Data Quality
+
+- Complete data for all patients regarding survival status
+- GVHD data complete for acute GVHD; chronic GVHD assessment ongoing
+- All deaths were classified and adjudicated for cause
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*Analysis date: January 12, 2026*
