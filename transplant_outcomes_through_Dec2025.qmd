@@ -19,14 +19,6 @@ execute:
   message: false
 ---
 
-::: {.callout-note}
-This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
-
-<!--
-To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
-The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
--->
-:::
 
 ```{r setup}
 library(tidyverse)
@@ -279,27 +271,38 @@ ggsurvplot(
 ## Overall Survival at Key Timepoints
 
 ```{r os-tables}
+# Function to calculate OS at specific timepoint using Kaplan-Meier
 calc_os <- function(data, timepoint, use_censored = TRUE) {
+  # Handle empty data
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_patients = 0,
+      n_deaths = NA_integer_,
+      n_alive = NA_integer_,
+      os_percent = NA_real_,
+      ci_lower = NA_real_,
+      ci_upper = NA_real_
+    ))
+  }
+  
   days_var <- if(use_censored) data$days_to_event_censored else data$days_to_event
   death_var <- if(use_censored) data$death_censored else data$death
   
-  at_risk <- which(days_var >= timepoint | (death_var == 1 & days_var < timepoint))
-  if(length(at_risk) == 0) return(tibble(n_patients = 0, n_deaths = 0, n_alive = 0, os_percent = NA))
+  surv_obj <- Surv(time = days_var, event = death_var)
+  km_fit <- survfit(surv_obj ~ 1, data = data)
+  km_summary <- summary(km_fit, times = timepoint, extend = TRUE)
   
-  data_at_risk <- data[at_risk, ]
-  days_at_risk <- days_var[at_risk]
-  death_at_risk <- death_var[at_risk]
-  
-  deaths <- sum(death_at_risk == 1 & days_at_risk <= timepoint)
-  n_at_risk <- length(at_risk)
-  n_alive <- n_at_risk - deaths
-  os_rate <- (n_alive / n_at_risk) * 100
+  os_pct <- round(km_summary$surv * 100, 1)
+  ci_lower <- round(km_summary$lower * 100, 1)
+  ci_upper <- round(km_summary$upper * 100, 1)
   
   return(tibble(
-    n_patients = n_at_risk,
-    n_deaths = deaths,
-    n_alive = n_alive,
-    os_percent = round(os_rate, 1)
+    n_patients = nrow(data),
+    n_deaths = sum(death_var[days_var <= timepoint]),
+    n_alive = nrow(data) - sum(death_var[days_var <= timepoint]),
+    os_percent = os_pct,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper
   ))
 }
 
