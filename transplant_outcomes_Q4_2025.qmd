@@ -1,0 +1,556 @@
+---
+title: "HSCT Outcomes Analysis - Q4 2025 Cohort"
+subtitle: "7 Patients Transplanted October-December 2025"
+author: "Transplant Outcomes Analysis"
+date: "January 15, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+::: {.callout-warning}
+## Limited Follow-up Period
+This report analyzes **only patients transplanted in Q4 2025 (October-December)**. Maximum follow-up is **58 days** as of December 31, 2025. Therefore:
+
+- **30-day outcomes**: Can be assessed for most patients
+- **100-day outcomes**: CANNOT be assessed (insufficient follow-up)
+- **365-day outcomes**: CANNOT be assessed (insufficient follow-up)
+
+This is a **preliminary snapshot** of early post-transplant outcomes.
+:::
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(survival)
+library(survminer)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Define censoring date and Q4 2025 period
+censor_date <- as.Date("2025-12-31")
+q4_start <- as.Date("2025-10-01")
+q4_end <- as.Date("2025-12-31")
+
+# Clean and prepare data - Q4 2025 only
+transplant_clean <- transplant_data |>
+  filter(`HSCT date` >= q4_start & `HSCT date` <= q4_end) |>
+  mutate(
+    death_date_clean = case_when(
+      `Death date` == "-" ~ NA,
+      TRUE ~ as.Date(as.numeric(`Death date`), origin = "1899-12-30")
+    ),
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    
+    # Censor follow-up at Dec 31, 2025
+    followup_censored = pmin(`Date of last follow up`, censor_date),
+    days_to_event_censored = as.numeric(difftime(followup_censored, `HSCT date`, units = "days")),
+    death_censored = ifelse(
+      death == 1 & `Date of last follow up` > censor_date, 
+      0, 
+      death
+    ),
+    
+    disease_status_cat = case_when(
+      `Disease status at HSCT` %in% c("Complete Remission", "Chronic Phase") ~ "CR/Chronic Phase",
+      TRUE ~ "Not in CR"
+    ),
+    donor_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling",
+      `Donor type` == "Related Haploidentical" ~ "Haplo",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      TRUE ~ "Other"
+    ),
+    death_cause = case_when(
+      death == 0 ~ "Alive",
+      grepl("disease", `State at last follow up`) ~ "Disease/Relapse",
+      grepl("GVHD", `State at last follow up`) ~ "GVHD",
+      grepl("infection", `State at last follow up`) ~ "Infection",
+      grepl("other cause", `State at last follow up`) ~ "Other"
+    ),
+    death_cause_censored = ifelse(
+      death == 1 & `Date of last follow up` > censor_date,
+      "Alive (censored)",
+      death_cause
+    ),
+    competing_event = ifelse(
+      death_censored == 0, 0,
+      ifelse(death_cause_censored %in% c("GVHD", "Infection", "Other"), 1, 2)
+    ),
+    acute_gvhd_any = ifelse(`acute GVHD` == "sì", 1, 0),
+    acute_gvhd_ii_iv = ifelse(!is.na(`acute GVHD global grade`) & `acute GVHD global grade` >= 2, 1, 0),
+    acute_gvhd_detailed = case_when(
+      is.na(`acute GVHD global grade`) ~ "None",
+      `acute GVHD global grade` == 1 ~ "Grade I",
+      `acute GVHD global grade` == 2 ~ "Grade II",
+      `acute GVHD global grade` >= 3 ~ "Grade III-IV"
+    ),
+    chronic_gvhd_any = case_when(
+      `chronic GVHD` == "sì" ~ 1,
+      `chronic GVHD` == "no" ~ 0,
+      TRUE ~ 0
+    ),
+    chronic_gvhd_mod_severe = ifelse(
+      `chronic GVHD global grade` %in% c("moderata", "severa"), 1, 0
+    ),
+    chronic_gvhd_detailed = case_when(
+      `chronic GVHD global grade` == "limitata" ~ "Mild",
+      `chronic GVHD global grade` == "moderata" ~ "Moderate",
+      `chronic GVHD global grade` == "severa" ~ "Severe",
+      TRUE ~ "None"
+    )
+  )
+```
+
+# Executive Summary
+
+This report analyzes **7 patients** who underwent HSCT during **Q4 2025 (October-December)**. As of December 31, 2025, these patients have a **maximum follow-up of 58 days**.
+
+**Important Limitations:**
+- This is a **preliminary early outcomes report**
+- Only **30-day outcomes** can be meaningfully assessed
+- Longer-term outcomes (100-day, 1-year) require additional follow-up
+- Small sample size limits statistical analysis
+
+**Early Findings (30 days):**
+- **1 death** occurred in this cohort (14.3%)
+- Early mortality occurred in a patient not in complete remission
+- **1 patient** (14.3%) developed acute GVHD Grade II-IV
+- No chronic GVHD cases yet (expected, given short follow-up)
+
+---
+
+# Cohort Characteristics
+
+## Patient Demographics
+
+```{r cohort-table}
+cohort_summary <- tibble(
+  Characteristic = c(
+    "Total Patients",
+    "Transplant Period",
+    "Median Age (range)",
+    "Male/Female",
+    "Median Follow-up, days (range)",
+    "Maximum Follow-up, days",
+    "Deaths by Dec 31, 2025"
+  ),
+  Value = c(
+    as.character(nrow(transplant_clean)),
+    "Oct-Dec 2025",
+    paste0(round(median(transplant_clean$`Age at HSCT`)), " (", 
+           min(transplant_clean$`Age at HSCT`), "-", 
+           max(transplant_clean$`Age at HSCT`), ")"),
+    paste0(sum(transplant_clean$Gender == "M"), "/", 
+           sum(transplant_clean$Gender == "F")),
+    paste0(round(median(transplant_clean$days_to_event_censored)), " (", 
+           min(transplant_clean$days_to_event_censored), "-", 
+           max(transplant_clean$days_to_event_censored), ")"),
+    as.character(max(transplant_clean$days_to_event_censored)),
+    as.character(sum(transplant_clean$death_censored))
+  )
+)
+
+kable(cohort_summary, caption = "Q4 2025 Cohort Summary") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Disease Status and Donor Types
+
+```{r disease-donor-table}
+disease_donor_summary <- tibble(
+  Category = c("Disease Status at HSCT", "", 
+               "Donor Type", "", ""),
+  Subcategory = c("CR/Chronic Phase", "Not in CR",
+                  "Haploidentical", "MUD (HLA-matched URD)", "Other"),
+  N = c(
+    sum(transplant_clean$disease_status_cat == "CR/Chronic Phase"),
+    sum(transplant_clean$disease_status_cat == "Not in CR"),
+    sum(transplant_clean$donor_main == "Haplo"),
+    sum(transplant_clean$donor_main == "MUD"),
+    sum(transplant_clean$donor_main == "Other")
+  ),
+  Percentage = c(
+    round(100 * mean(transplant_clean$disease_status_cat == "CR/Chronic Phase"), 1),
+    round(100 * mean(transplant_clean$disease_status_cat == "Not in CR"), 1),
+    round(100 * mean(transplant_clean$donor_main == "Haplo"), 1),
+    round(100 * mean(transplant_clean$donor_main == "MUD"), 1),
+    round(100 * mean(transplant_clean$donor_main == "Other"), 1)
+  )
+)
+
+kable(disease_donor_summary, caption = "Q4 2025: Disease Status and Donor Types") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  pack_rows("Disease Status at HSCT", 1, 2) |>
+  pack_rows("Donor Type", 3, 5)
+```
+
+## HSCT Dates
+
+```{r hsct-dates}
+hsct_timeline <- transplant_clean |>
+  arrange(`HSCT date`) |>
+  select(`HSCT date`, disease_status_cat, donor_main, death_censored) |>
+  mutate(
+    Status = ifelse(death_censored == 1, "Deceased", "Alive"),
+    `Follow-up (days)` = transplant_clean$days_to_event_censored[order(transplant_clean$`HSCT date`)]
+  ) |>
+  select(`HSCT date`, disease_status_cat, donor_main, `Follow-up (days)`, Status)
+
+kable(hsct_timeline, 
+      col.names = c("HSCT Date", "Disease Status", "Donor Type", "Follow-up (days)", "Status"),
+      caption = "Q4 2025: Individual Patient Timeline") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Early Outcomes (30 Days)
+
+::: {.callout-note}
+## Assessable Timepoint
+With follow-up ranging from 14-58 days, **30-day outcomes** can be assessed for patients with ≥30 days follow-up.
+:::
+
+## Overall Survival at 30 Days
+
+```{r os-30day}
+# Calculate 30-day OS
+patients_30d_fu <- transplant_clean |>
+  filter(days_to_event_censored >= 30 | (death_censored == 1 & days_to_event_censored < 30))
+
+n_at_risk_30d <- nrow(patients_30d_fu)
+deaths_30d <- sum(patients_30d_fu$death_censored == 1 & patients_30d_fu$days_to_event_censored <= 30)
+alive_30d <- n_at_risk_30d - deaths_30d
+os_30d <- (alive_30d / n_at_risk_30d) * 100
+
+os_30d_summary <- tibble(
+  Outcome = "30-day Overall Survival",
+  `N Assessable` = n_at_risk_30d,
+  Deaths = deaths_30d,
+  Alive = alive_30d,
+  `OS (%)` = round(os_30d, 1)
+)
+
+kable(os_30d_summary, caption = "30-Day Overall Survival (Q4 2025 Cohort)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+### 30-Day Survival by Disease Status
+
+```{r os-30day-disease}
+# CR/Chronic Phase
+cr_patients_30d <- transplant_clean |>
+  filter(disease_status_cat == "CR/Chronic Phase") |>
+  filter(days_to_event_censored >= 30 | (death_censored == 1 & days_to_event_censored < 30))
+
+n_cr_30d <- nrow(cr_patients_30d)
+deaths_cr_30d <- sum(cr_patients_30d$death_censored == 1 & cr_patients_30d$days_to_event_censored <= 30)
+os_cr_30d <- if(n_cr_30d > 0) ((n_cr_30d - deaths_cr_30d) / n_cr_30d) * 100 else NA
+
+# Not in CR
+not_cr_patients_30d <- transplant_clean |>
+  filter(disease_status_cat == "Not in CR") |>
+  filter(days_to_event_censored >= 30 | (death_censored == 1 & days_to_event_censored < 30))
+
+n_not_cr_30d <- nrow(not_cr_patients_30d)
+deaths_not_cr_30d <- sum(not_cr_patients_30d$death_censored == 1 & not_cr_patients_30d$days_to_event_censored <= 30)
+os_not_cr_30d <- if(n_not_cr_30d > 0) ((n_not_cr_30d - deaths_not_cr_30d) / n_not_cr_30d) * 100 else NA
+
+os_disease_30d <- tibble(
+  `Disease Status` = c("CR/Chronic Phase", "Not in CR"),
+  `N Assessable` = c(n_cr_30d, n_not_cr_30d),
+  Deaths = c(deaths_cr_30d, deaths_not_cr_30d),
+  `OS at 30d (%)` = c(round(os_cr_30d, 1), round(os_not_cr_30d, 1))
+)
+
+kable(os_disease_30d, caption = "30-Day OS by Disease Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Early Mortality
+
+```{r early-mortality}
+if(sum(transplant_clean$death_censored) > 0) {
+  death_details <- transplant_clean |>
+    filter(death_censored == 1) |>
+    select(`HSCT date`, disease_status_cat, donor_main, days_to_event_censored, death_cause_censored) |>
+    arrange(days_to_event_censored)
+  
+  kable(death_details,
+        col.names = c("HSCT Date", "Disease Status", "Donor", "Days to Death", "Cause"),
+        caption = "Death Details (Q4 2025 Cohort)") |>
+    kable_styling(bootstrap_options = c("striped", "hover"))
+} else {
+  cat("No deaths recorded in Q4 2025 cohort as of December 31, 2025.\n")
+}
+```
+
+---
+
+# GVHD Assessment
+
+## Acute GVHD (Early Assessment)
+
+```{r acute-gvhd}
+# Overall acute GVHD
+acute_gvhd_summary <- tibble(
+  Grade = c("No GVHD", "Grade I", "Grade II", "Grade III-IV", "Total Grade II-IV"),
+  N = c(
+    sum(transplant_clean$acute_gvhd_detailed == "None"),
+    sum(transplant_clean$acute_gvhd_detailed == "Grade I"),
+    sum(transplant_clean$acute_gvhd_detailed == "Grade II"),
+    sum(transplant_clean$acute_gvhd_detailed == "Grade III-IV"),
+    sum(transplant_clean$acute_gvhd_ii_iv == 1)
+  ),
+  Percentage = c(
+    round(100 * mean(transplant_clean$acute_gvhd_detailed == "None"), 1),
+    round(100 * mean(transplant_clean$acute_gvhd_detailed == "Grade I"), 1),
+    round(100 * mean(transplant_clean$acute_gvhd_detailed == "Grade II"), 1),
+    round(100 * mean(transplant_clean$acute_gvhd_detailed == "Grade III-IV"), 1),
+    round(100 * mean(transplant_clean$acute_gvhd_ii_iv == 1), 1)
+  )
+)
+
+kable(acute_gvhd_summary, 
+      caption = "Early Acute GVHD Incidence (Q4 2025 Cohort)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+::: {.callout-note}
+## Acute GVHD Timing
+Acute GVHD typically develops within the first 100 days post-transplant. With maximum 58 days follow-up, some cases may not yet have manifested. These are **early** rates only.
+:::
+
+### Acute GVHD by Donor Type
+
+```{r acute-gvhd-donor}
+acute_gvhd_donor <- transplant_clean |>
+  group_by(donor_main) |>
+  summarise(
+    N = n(),
+    `Any Acute GVHD` = sum(acute_gvhd_any),
+    `Grade II-IV` = sum(acute_gvhd_ii_iv),
+    `% Grade II-IV` = round(100 * mean(acute_gvhd_ii_iv), 1)
+  )
+
+kable(acute_gvhd_donor, 
+      caption = "Early Acute GVHD by Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD
+
+```{r chronic-gvhd}
+chronic_gvhd_cases <- sum(transplant_clean$chronic_gvhd_any == 1)
+
+if(chronic_gvhd_cases == 0) {
+  cat("**No chronic GVHD cases observed as of December 31, 2025.**\n\n")
+  cat("This is expected given the short follow-up period. Chronic GVHD typically develops after day 100 post-transplant.\n")
+} else {
+  chronic_gvhd_summary <- transplant_clean |>
+    group_by(chronic_gvhd_detailed) |>
+    summarise(N = n()) |>
+    mutate(Percentage = round(100 * N / sum(N), 1))
+  
+  kable(chronic_gvhd_summary, caption = "Chronic GVHD Cases") |>
+    kable_styling(bootstrap_options = c("striped", "hover"))
+}
+```
+
+---
+
+# Kaplan-Meier Survival Curve
+
+```{r km-curve, fig.width=10, fig.height=7}
+surv_obj <- Surv(time = transplant_clean$days_to_event_censored, 
+                 event = transplant_clean$death_censored)
+km_fit <- survfit(surv_obj ~ 1, data = transplant_clean)
+
+ggsurvplot(
+  km_fit,
+  data = transplant_clean,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  xlab = "Days post-HSCT",
+  ylab = "Overall Survival Probability",
+  title = "Overall Survival - Q4 2025 Cohort (n=7)",
+  subtitle = "Follow-up censored at December 31, 2025 (maximum 58 days)",
+  palette = "#2E86AB",
+  ggtheme = theme_bw(base_size = 13),
+  break.x.by = 10,
+  xlim = c(0, 60),
+  font.title = c(14, "bold")
+)
+```
+
+### Survival by Disease Status
+
+```{r km-disease, fig.width=10, fig.height=7}
+km_fit_disease <- survfit(Surv(days_to_event_censored, death_censored) ~ disease_status_cat, 
+                          data = transplant_clean)
+
+ggsurvplot(
+  km_fit_disease,
+  data = transplant_clean,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  xlab = "Days post-HSCT",
+  ylab = "Overall Survival Probability",
+  title = "Overall Survival by Disease Status - Q4 2025",
+  legend.title = "Disease Status",
+  legend.labs = c(paste0("CR/Chronic Phase (n=", sum(transplant_clean$disease_status_cat == "CR/Chronic Phase"), ")"),
+                  paste0("Not in CR (n=", sum(transplant_clean$disease_status_cat == "Not in CR"), ")")),
+  palette = c("#27AE60", "#E74C3C"),
+  ggtheme = theme_bw(base_size = 13),
+  break.x.by = 10,
+  xlim = c(0, 60),
+  font.title = c(14, "bold")
+)
+```
+
+---
+
+# Key Findings and Limitations
+
+## Early Outcomes (Q4 2025 Cohort)
+
+### 30-Day Results:
+- **Overall Survival**: `r round(os_30d, 1)`% (`r alive_30d`/`r n_at_risk_30d` patients assessable)
+- **Early Deaths**: `r deaths_30d` patient(s)
+- **Acute GVHD Grade II-IV**: `r sum(transplant_clean$acute_gvhd_ii_iv)` patient(s) (`r round(100 * mean(transplant_clean$acute_gvhd_ii_iv), 1)`%)
+
+### Patient Composition:
+- **Disease Status**: `r sum(transplant_clean$disease_status_cat == "CR/Chronic Phase")` CR/CP (`r round(100 * mean(transplant_clean$disease_status_cat == "CR/Chronic Phase"), 1)`%), `r sum(transplant_clean$disease_status_cat == "Not in CR")` Not in CR (`r round(100 * mean(transplant_clean$disease_status_cat == "Not in CR"), 1)`%)
+- **Donor Types**: `r sum(transplant_clean$donor_main == "Haplo")` Haploidentical, `r sum(transplant_clean$donor_main == "MUD")` MUD, `r sum(transplant_clean$donor_main == "Other")` Other
+
+## Important Limitations
+
+::: {.callout-warning collapse="false"}
+## Study Limitations
+
+1. **Very Short Follow-up**: Maximum 58 days (median `r round(median(transplant_clean$days_to_event_censored))` days)
+   - Only 30-day outcomes can be assessed
+   - 100-day and 1-year outcomes require additional follow-up
+   
+2. **Small Sample Size**: Only 7 patients
+   - No statistical power for subgroup comparisons
+   - Individual outcomes heavily influence overall rates
+   
+3. **Incomplete GVHD Assessment**:
+   - Acute GVHD can develop up to day 100
+   - Chronic GVHD typically develops after day 100
+   - Current rates are preliminary and will likely increase
+   
+4. **Early Snapshot**: This represents **early post-transplant period only**
+   - Many complications manifest later
+   - Follow-up updates needed for complete assessment
+
+5. **No Statistical Testing**: Sample too small for meaningful statistical analysis
+:::
+
+## Next Steps
+
+::: {.callout-tip}
+## Recommendations for Follow-up
+
+1. **Update analysis at 100 days post-HSCT** for the earliest patients (target: ~March 2026)
+2. **Quarterly updates** to track outcomes as follow-up accumulates
+3. **Compare Q4 2025 cohort to historical controls** once adequate follow-up achieved
+4. **Monitor for late acute GVHD** (days 30-100) in coming months
+5. **Assess chronic GVHD** starting at day 100 post-transplant
+:::
+
+---
+
+# Comparison to Full Cohort
+
+```{r comparison-table}
+# Load full cohort data for comparison
+full_cohort_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+full_cohort_clean <- full_cohort_data |>
+  mutate(
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    disease_status_cat = case_when(
+      `Disease status at HSCT` %in% c("Complete Remission", "Chronic Phase") ~ "CR/Chronic Phase",
+      TRUE ~ "Not in CR"
+    ),
+    donor_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling",
+      `Donor type` == "Related Haploidentical" ~ "Haplo",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      TRUE ~ "Other"
+    ),
+    acute_gvhd_ii_iv = ifelse(!is.na(`acute GVHD global grade`) & `acute GVHD global grade` >= 2, 1, 0)
+  )
+
+# Calculate 30-day outcomes for full cohort
+full_30d_patients <- full_cohort_clean |>
+  filter(as.numeric(difftime(pmin(`Date of last follow up`, censor_date), `HSCT date`, units = "days")) >= 30 |
+         (death == 1 & as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")) < 30))
+
+full_30d_deaths <- sum(full_30d_patients$death == 1 & 
+                       as.numeric(difftime(full_30d_patients$`Date of last follow up`, 
+                                          full_30d_patients$`HSCT date`, units = "days")) <= 30)
+full_30d_os <- ((nrow(full_30d_patients) - full_30d_deaths) / nrow(full_30d_patients)) * 100
+
+comparison <- tibble(
+  Metric = c("N Patients", "% CR/Chronic Phase", "30-day OS (%)", "Acute GVHD Grade II-IV (%)"),
+  `Q4 2025 Cohort` = c(
+    as.character(nrow(transplant_clean)),
+    paste0(round(100 * mean(transplant_clean$disease_status_cat == "CR/Chronic Phase"), 1), "%"),
+    paste0(round(os_30d, 1), "%"),
+    paste0(round(100 * mean(transplant_clean$acute_gvhd_ii_iv), 1), "%")
+  ),
+  `Full Cohort (n=47)` = c(
+    "47",
+    paste0(round(100 * mean(full_cohort_clean$disease_status_cat == "CR/Chronic Phase"), 1), "%"),
+    paste0(round(full_30d_os, 1), "%"),
+    paste0(round(100 * mean(full_cohort_clean$acute_gvhd_ii_iv), 1), "%")
+  )
+)
+
+kable(comparison, caption = "Q4 2025 Cohort vs Full Cohort Comparison") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+::: {.callout-note}
+## Interpretation
+The Q4 2025 cohort represents recent transplants with very early follow-up. Direct comparison to the full cohort (which includes patients with up to 700 days follow-up) should be interpreted with caution due to the different follow-up periods.
+:::
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*Q4 2025 Cohort: October-December 2025 transplants only*
+
+*Data censored at December 31, 2025 (Maximum follow-up: 58 days)*
