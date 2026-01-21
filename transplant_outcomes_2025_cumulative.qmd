@@ -1,0 +1,1618 @@
+
+---
+title: "HSCT Outcomes: 2025 Cumulative Annual Summary"
+subtitle: "Cumulative Analysis of All 2025 Transplants - Overall Survival, Mortality, and GVHD Endpoints"
+author: "Transplant Outcomes Analysis"
+date: "January 21, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Filter for 2025 transplants
+transplant_2025 <- transplant_data |>
+  mutate(hsct_year = year(`HSCT date`)) |>
+  filter(hsct_year == 2025) |>
+  mutate(
+    # Death and follow-up variables
+    death_date_clean = case_when(
+      `Death date` == "-" ~ NA,
+      TRUE ~ as.Date(as.numeric(`Death date`), origin = "1899-12-30")
+    ),
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    
+    # Quarter (trimester) calculation
+    hsct_quarter = quarter(`HSCT date`),
+    quarter_label = paste0("Q", hsct_quarter, " ", year(`HSCT date`)),
+    
+    # Disease status categorization
+    disease_status_binary = case_when(
+      `Disease status at HSCT` == "Complete Remission" ~ "Complete Remission",
+      TRUE ~ "Not in Complete Remission"
+    ),
+    
+    # Donor type categorization
+    donor_type_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling HLA-identical",
+      `Donor type` == "Related Haploidentical" ~ "Haploidentical",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      `Donor type` == "URD HLA-mismatched" ~ "MMUD"
+    ),
+    
+    # Cause of death classification
+    death_cause = case_when(
+      death == 0 ~ "Alive",
+      grepl("disease", `State at last follow up`) ~ "Relapse",
+      grepl("GVHD", `State at last follow up`) ~ "TRM: GVHD",
+      grepl("infection", `State at last follow up`) ~ "TRM: Infection",
+      grepl("other cause", `State at last follow up`) ~ "TRM: Other",
+      TRUE ~ "TRM: Unknown"
+    ),
+    
+    # Death type classification
+    death_type = case_when(
+      death == 0 ~ "Alive",
+      death_cause == "Relapse" ~ "Relapse",
+      TRUE ~ "TRM/NRM"
+    ),
+    
+    # Specific endpoint indicators
+    is_nrm = ifelse(death_type == "TRM/NRM", 1, 0),
+    is_trm = ifelse(death_type == "TRM/NRM", 1, 0),
+    is_relapse_death = ifelse(death_type == "Relapse", 1, 0),
+    
+    # Acute GVHD categorization
+    acute_gvhd_any = ifelse(`acute GVHD` == "sì", 1, 0),
+    acute_gvhd_grade = case_when(
+      is.na(`acute GVHD global grade`) | `acute GVHD` == "no" ~ "None",
+      `acute GVHD global grade` == 1 ~ "Grade I",
+      `acute GVHD global grade` == 2 ~ "Grade II",
+      `acute GVHD global grade` == 3 ~ "Grade III",
+      `acute GVHD global grade` == 4 ~ "Grade IV",
+      TRUE ~ "None"
+    ),
+    acute_gvhd_grade_ii_iv = case_when(
+      acute_gvhd_grade %in% c("Grade II", "Grade III", "Grade IV") ~ 1,
+      TRUE ~ 0
+    ),
+    
+    # Chronic GVHD categorization
+    chronic_gvhd_any = ifelse(`chronic GVHD` == "sì", 1, 0),
+    chronic_gvhd_grade = case_when(
+      is.na(`chronic GVHD global grade`) | `chronic GVHD` == "no" ~ "None",
+      `chronic GVHD global grade` == "limitata" ~ "Mild",
+      `chronic GVHD global grade` == "moderata" ~ "Moderate",
+      `chronic GVHD global grade` == "severa" ~ "Severe",
+      TRUE ~ "None"
+    ),
+    chronic_gvhd_mild = ifelse(chronic_gvhd_grade == "Mild", 1, 0),
+    chronic_gvhd_mod_severe = ifelse(chronic_gvhd_grade %in% c("Moderate", "Severe"), 1, 0)
+  )
+```
+
+# Executive Summary
+
+This report provides a **cumulative analysis** of all **`r nrow(transplant_2025)` patients** who underwent HSCT during calendar year 2025.
+
+**Key Outcomes Analyzed:**
+
+1. **Overall Survival (OS)**: Percentage of patients alive at specific timepoints
+2. **Non-Relapse Mortality (NRM)**: Deaths from transplant-related complications
+3. **Transplant-Related Mortality (TRM)**: Equivalent to NRM
+4. **Relapse-Related Mortality**: Deaths from disease relapse
+5. **Acute GVHD Grade II-IV**: Clinically significant acute GVHD
+6. **Chronic GVHD**: Total, Mild, and Moderate-Severe
+
+**Overall Results (Cumulative 2025):**
+
+- **Total Patients**: `r nrow(transplant_2025)`
+- **Total Deaths**: `r sum(transplant_2025$death)` (`r round(100 * mean(transplant_2025$death), 1)`%)
+- **Overall Survival**: `r round(100 * (1 - mean(transplant_2025$death)), 1)`%
+- **NRM/TRM Events**: `r sum(transplant_2025$is_nrm)` (`r round(100 * mean(transplant_2025$is_nrm), 1)`%)
+- **Relapse Deaths**: `r sum(transplant_2025$is_relapse_death)` (`r round(100 * mean(transplant_2025$is_relapse_death), 1)`%)
+- **Acute GVHD Grade II-IV**: `r sum(transplant_2025$acute_gvhd_grade_ii_iv)` (`r round(100 * mean(transplant_2025$acute_gvhd_grade_ii_iv), 1)`%)
+- **Chronic GVHD (Any)**: `r sum(transplant_2025$chronic_gvhd_any)` (`r round(100 * mean(transplant_2025$chronic_gvhd_any), 1)`%)
+
+::: {.callout-warning}
+## Limited Follow-up Period
+This cohort has **limited follow-up time** with transplants occurring throughout 2025. Earlier transplants (Q1) have longer follow-up than later transplants (Q4). Results should be interpreted with caution, especially for late timepoints (365 days) and chronic GVHD assessment.
+:::
+
+---
+
+# Methodology
+
+## Endpoint Definitions
+
+**Overall Survival (OS):**
+
+- Percentage of patients alive at specific timepoints (Day 30, 100, 365)
+- Calculated as: (Number Alive / Total N) × 100
+
+**Non-Relapse Mortality (NRM) / Transplant-Related Mortality (TRM):**
+
+- Deaths from any cause OTHER THAN disease relapse
+- Includes: GVHD, infections, organ toxicity, other transplant complications
+- NRM = TRM in this analysis
+
+**Relapse-Related Mortality:**
+
+- Deaths from disease relapse or progression
+- Excludes all transplant-related complications
+
+**Acute GVHD Grade II-IV:**
+
+- Clinically significant acute GVHD (Grades II, III, IV)
+- Excludes Grade I and no acute GVHD
+
+**Chronic GVHD:**
+
+- **Total/Any**: Any chronic GVHD regardless of severity
+- **Mild**: Limited/mild chronic GVHD
+- **Moderate-Severe**: Moderate or severe chronic GVHD requiring treatment
+
+## Calculation Functions
+
+```{r calculation-functions}
+# Function to calculate OS at specific timepoint using simple percentages
+calc_os_simple <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_deaths = NA_integer_,
+      n_alive = NA_integer_,
+      os_pct = NA_real_
+    ))
+  }
+  
+  n_deaths <- sum(data$death[data$days_to_event <= timepoint])
+  n_alive <- nrow(data) - n_deaths
+  os_pct <- round(100 * n_alive / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_deaths = n_deaths,
+    n_alive = n_alive,
+    os_pct = os_pct
+  ))
+}
+
+# Function to calculate NRM at specific timepoint
+calc_nrm_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_nrm = NA_integer_,
+      n_no_nrm = NA_integer_,
+      nrm_pct = NA_real_
+    ))
+  }
+  
+  n_nrm <- sum(data$is_nrm[data$days_to_event <= timepoint])
+  n_no_nrm <- nrow(data) - n_nrm
+  nrm_pct <- round(100 * n_nrm / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_nrm = n_nrm,
+    n_no_nrm = n_no_nrm,
+    nrm_pct = nrm_pct
+  ))
+}
+
+# Function to calculate TRM at specific timepoint (same as NRM)
+calc_trm_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_trm = NA_integer_,
+      n_no_trm = NA_integer_,
+      trm_pct = NA_real_
+    ))
+  }
+  
+  n_trm <- sum(data$is_trm[data$days_to_event <= timepoint])
+  n_no_trm <- nrow(data) - n_trm
+  trm_pct <- round(100 * n_trm / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_trm = n_trm,
+    n_no_trm = n_no_trm,
+    trm_pct = trm_pct
+  ))
+}
+
+# Function to calculate Relapse Mortality at specific timepoint
+calc_relapse_mort_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_relapse = NA_integer_,
+      n_no_relapse = NA_integer_,
+      relapse_pct = NA_real_
+    ))
+  }
+  
+  n_relapse <- sum(data$is_relapse_death[data$days_to_event <= timepoint])
+  n_no_relapse <- nrow(data) - n_relapse
+  relapse_pct <- round(100 * n_relapse / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_relapse = n_relapse,
+    n_no_relapse = n_no_relapse,
+    relapse_pct = relapse_pct
+  ))
+}
+
+# Function to calculate acute GVHD II-IV rate
+calc_acute_gvhd_ii_iv <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$acute_gvhd_grade_ii_iv)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (any) rate
+calc_chronic_gvhd_any <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_any)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (mild) rate
+calc_chronic_gvhd_mild <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_mild)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (moderate-severe) rate
+calc_chronic_gvhd_mod_severe <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_mod_severe)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+```
+
+---
+
+# Overall Survival (OS) - Cumulative 2025
+
+## Cohort Characteristics
+
+```{r cohort-overall}
+cohort_summary <- tibble(
+  Metric = c("Total Patients", "Deaths", "Alive", "Median Age", "Male/Female", 
+             "Complete Remission", "Not in Complete Remission", "Median Follow-up (days)"),
+  Value = c(
+    nrow(transplant_2025),
+    sum(transplant_2025$death),
+    nrow(transplant_2025) - sum(transplant_2025$death),
+    round(median(transplant_2025$`Age at HSCT`)),
+    paste0(sum(transplant_2025$Gender == "M"), "/", sum(transplant_2025$Gender == "F")),
+    sum(transplant_2025$disease_status_binary == "Complete Remission"),
+    sum(transplant_2025$disease_status_binary == "Not in Complete Remission"),
+    round(median(transplant_2025$days_to_event))
+  )
+)
+
+kable(cohort_summary,
+      col.names = c("Characteristic", "Value"),
+      caption = "Cohort Characteristics - All 2025 Transplants") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Overall Survival - All Patients
+
+```{r os-overall}
+os_30 <- calc_os_simple(transplant_2025, 30)
+os_100 <- calc_os_simple(transplant_2025, 100)
+os_365 <- calc_os_simple(transplant_2025, 365)
+
+os_overall_results <- tibble(
+  Timepoint = c("Day 30", "Day 100", "Day 365"),
+  N = c(os_30$n_total, os_100$n_total, os_365$n_total),
+  Deaths = c(os_30$n_deaths, os_100$n_deaths, os_365$n_deaths),
+  Alive = c(os_30$n_alive, os_100$n_alive, os_365$n_alive),
+  OS_Rate = paste0(c(os_30$n_alive, os_100$n_alive, os_365$n_alive), "/", 
+                   c(os_30$n_total, os_100$n_total, os_365$n_total), " (", 
+                   c(os_30$os_pct, os_100$os_pct, os_365$os_pct), "%)")
+)
+
+kable(os_overall_results,
+      col.names = c("Timepoint", "N", "Deaths", "Alive", "Overall Survival (n/N %)"),
+      caption = "Overall Survival at Key Timepoints - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Overall Survival by Complete Remission Status
+
+```{r os-by-cr}
+cr_groups <- c("Complete Remission", "Not in Complete Remission")
+os_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    os_30 <- calc_os_simple(cr_data, 30)
+    os_100 <- calc_os_simple(cr_data, 100)
+    os_365 <- calc_os_simple(cr_data, 365)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = os_30$n_total,
+      
+      Deaths_30d = os_30$n_deaths,
+      OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+      
+      Deaths_100d = os_100$n_deaths,
+      OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+      
+      Deaths_365d = os_365$n_deaths,
+      OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+    )
+    
+    os_cr_results <- bind_rows(os_cr_results, cr_result)
+  }
+}
+
+kable(os_cr_results,
+      col.names = c("Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Overall Survival by Donor Type
+
+```{r os-by-donor}
+donor_types <- unique(transplant_2025$donor_type_main)
+os_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    os_30 <- calc_os_simple(donor_data, 30)
+    os_100 <- calc_os_simple(donor_data, 100)
+    os_365 <- calc_os_simple(donor_data, 365)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = os_30$n_total,
+      
+      Deaths_30d = os_30$n_deaths,
+      OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+      
+      Deaths_100d = os_100$n_deaths,
+      OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+      
+      Deaths_365d = os_365$n_deaths,
+      OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+    )
+    
+    os_donor_results <- bind_rows(os_donor_results, donor_result)
+  }
+}
+
+kable(os_donor_results,
+      col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Overall Survival by Donor Type and Complete Remission Status
+
+### Complete Remission Patients
+
+```{r os-donor-cr}
+cr_data <- transplant_2025 |> filter(disease_status_binary == "Complete Remission")
+
+if(nrow(cr_data) > 0) {
+  donor_types <- unique(cr_data$donor_type_main)
+  
+  os_donor_cr_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- cr_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      os_donor_cr_results <- bind_rows(os_donor_cr_results, donor_result)
+    }
+  }
+  
+  kable(os_donor_cr_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Overall Survival by Donor Type (Complete Remission Only) - Cumulative 2025") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No CR patients in 2025\n")
+}
+```
+
+### Not in Complete Remission Patients
+
+```{r os-donor-not-cr}
+not_cr_data <- transplant_2025 |> filter(disease_status_binary == "Not in Complete Remission")
+
+if(nrow(not_cr_data) > 0) {
+  donor_types <- unique(not_cr_data$donor_type_main)
+  
+  os_donor_not_cr_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- not_cr_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      os_donor_not_cr_results <- bind_rows(os_donor_not_cr_results, donor_result)
+    }
+  }
+  
+  kable(os_donor_not_cr_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Overall Survival by Donor Type (Not in Complete Remission Only) - Cumulative 2025") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No Not in CR patients in 2025\n")
+}
+```
+
+---
+
+# Mortality Endpoints - Cumulative 2025
+
+## Non-Relapse Mortality (NRM)
+
+### NRM - All Patients
+
+```{r nrm-overall}
+nrm_30 <- calc_nrm_timepoint(transplant_2025, 30)
+nrm_100 <- calc_nrm_timepoint(transplant_2025, 100)
+nrm_365 <- calc_nrm_timepoint(transplant_2025, 365)
+
+nrm_overall_results <- tibble(
+  Timepoint = c("Day 30", "Day 100", "Day 365"),
+  N = c(nrm_30$n_total, nrm_100$n_total, nrm_365$n_total),
+  Events = c(nrm_30$n_nrm, nrm_100$n_nrm, nrm_365$n_nrm),
+  NRM_Rate = paste0(c(nrm_30$n_nrm, nrm_100$n_nrm, nrm_365$n_nrm), "/", 
+                    c(nrm_30$n_total, nrm_100$n_total, nrm_365$n_total), " (", 
+                    c(nrm_30$nrm_pct, nrm_100$nrm_pct, nrm_365$nrm_pct), "%)")
+)
+
+kable(nrm_overall_results,
+      col.names = c("Timepoint", "N", "NRM Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality at Key Timepoints - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### NRM by Complete Remission Status
+
+```{r nrm-by-cr}
+nrm_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    nrm_30 <- calc_nrm_timepoint(cr_data, 30)
+    nrm_100 <- calc_nrm_timepoint(cr_data, 100)
+    nrm_365 <- calc_nrm_timepoint(cr_data, 365)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = nrm_30$n_total,
+      
+      NRM_30d = nrm_30$n_nrm,
+      NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+      
+      NRM_100d = nrm_100$n_nrm,
+      NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+      
+      NRM_365d = nrm_365$n_nrm,
+      NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+    )
+    
+    nrm_cr_results <- bind_rows(nrm_cr_results, cr_result)
+  }
+}
+
+kable(nrm_cr_results,
+      col.names = c("Disease Status", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### NRM by Donor Type
+
+```{r nrm-by-donor}
+nrm_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    nrm_30 <- calc_nrm_timepoint(donor_data, 30)
+    nrm_100 <- calc_nrm_timepoint(donor_data, 100)
+    nrm_365 <- calc_nrm_timepoint(donor_data, 365)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = nrm_30$n_total,
+      
+      NRM_30d = nrm_30$n_nrm,
+      NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+      
+      NRM_100d = nrm_100$n_nrm,
+      NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+      
+      NRM_365d = nrm_365$n_nrm,
+      NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+    )
+    
+    nrm_donor_results <- bind_rows(nrm_donor_results, donor_result)
+  }
+}
+
+kable(nrm_donor_results,
+      col.names = c("Donor Type", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### NRM by Donor Type and CR Status
+
+```{r nrm-by-donor-cr}
+nrm_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        nrm_30 <- calc_nrm_timepoint(donor_data, 30)
+        nrm_100 <- calc_nrm_timepoint(donor_data, 100)
+        nrm_365 <- calc_nrm_timepoint(donor_data, 365)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = nrm_30$n_total,
+          
+          NRM_30d = nrm_30$n_nrm,
+          NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+          
+          NRM_100d = nrm_100$n_nrm,
+          NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+          
+          NRM_365d = nrm_365$n_nrm,
+          NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+        )
+        
+        nrm_donor_cr_strat <- bind_rows(nrm_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(nrm_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Transplant-Related Mortality (TRM)
+
+::: {.callout-note}
+TRM is equivalent to NRM in this analysis. Both represent deaths from transplant complications rather than disease relapse.
+:::
+
+### TRM - All Patients
+
+```{r trm-overall}
+trm_30 <- calc_trm_timepoint(transplant_2025, 30)
+trm_100 <- calc_trm_timepoint(transplant_2025, 100)
+trm_365 <- calc_trm_timepoint(transplant_2025, 365)
+
+trm_overall_results <- tibble(
+  Timepoint = c("Day 30", "Day 100", "Day 365"),
+  N = c(trm_30$n_total, trm_100$n_total, trm_365$n_total),
+  Events = c(trm_30$n_trm, trm_100$n_trm, trm_365$n_trm),
+  TRM_Rate = paste0(c(trm_30$n_trm, trm_100$n_trm, trm_365$n_trm), "/", 
+                    c(trm_30$n_total, trm_100$n_total, trm_365$n_total), " (", 
+                    c(trm_30$trm_pct, trm_100$trm_pct, trm_365$trm_pct), "%)")
+)
+
+kable(trm_overall_results,
+      col.names = c("Timepoint", "N", "TRM Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality at Key Timepoints - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### TRM by Complete Remission Status
+
+```{r trm-by-cr}
+trm_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    trm_30 <- calc_trm_timepoint(cr_data, 30)
+    trm_100 <- calc_trm_timepoint(cr_data, 100)
+    trm_365 <- calc_trm_timepoint(cr_data, 365)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = trm_30$n_total,
+      
+      TRM_30d = trm_30$n_trm,
+      TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+      
+      TRM_100d = trm_100$n_trm,
+      TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+      
+      TRM_365d = trm_365$n_trm,
+      TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+    )
+    
+    trm_cr_results <- bind_rows(trm_cr_results, cr_result)
+  }
+}
+
+kable(trm_cr_results,
+      col.names = c("Disease Status", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### TRM by Donor Type
+
+```{r trm-by-donor}
+trm_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    trm_30 <- calc_trm_timepoint(donor_data, 30)
+    trm_100 <- calc_trm_timepoint(donor_data, 100)
+    trm_365 <- calc_trm_timepoint(donor_data, 365)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = trm_30$n_total,
+      
+      TRM_30d = trm_30$n_trm,
+      TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+      
+      TRM_100d = trm_100$n_trm,
+      TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+      
+      TRM_365d = trm_365$n_trm,
+      TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+    )
+    
+    trm_donor_results <- bind_rows(trm_donor_results, donor_result)
+  }
+}
+
+kable(trm_donor_results,
+      col.names = c("Donor Type", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### TRM by Donor Type and CR Status
+
+```{r trm-by-donor-cr}
+trm_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        trm_30 <- calc_trm_timepoint(donor_data, 30)
+        trm_100 <- calc_trm_timepoint(donor_data, 100)
+        trm_365 <- calc_trm_timepoint(donor_data, 365)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = trm_30$n_total,
+          
+          TRM_30d = trm_30$n_trm,
+          TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+          
+          TRM_100d = trm_100$n_trm,
+          TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+          
+          TRM_365d = trm_365$n_trm,
+          TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+        )
+        
+        trm_donor_cr_strat <- bind_rows(trm_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(trm_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Relapse-Related Mortality
+
+### Relapse Mortality - All Patients
+
+```{r relapse-overall}
+rel_30 <- calc_relapse_mort_timepoint(transplant_2025, 30)
+rel_100 <- calc_relapse_mort_timepoint(transplant_2025, 100)
+rel_365 <- calc_relapse_mort_timepoint(transplant_2025, 365)
+
+relapse_overall_results <- tibble(
+  Timepoint = c("Day 30", "Day 100", "Day 365"),
+  N = c(rel_30$n_total, rel_100$n_total, rel_365$n_total),
+  Events = c(rel_30$n_relapse, rel_100$n_relapse, rel_365$n_relapse),
+  Relapse_Rate = paste0(c(rel_30$n_relapse, rel_100$n_relapse, rel_365$n_relapse), "/", 
+                        c(rel_30$n_total, rel_100$n_total, rel_365$n_total), " (", 
+                        c(rel_30$relapse_pct, rel_100$relapse_pct, rel_365$relapse_pct), "%)")
+)
+
+kable(relapse_overall_results,
+      col.names = c("Timepoint", "N", "Relapse Deaths", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality at Key Timepoints - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Relapse Mortality by Complete Remission Status
+
+```{r relapse-by-cr}
+relapse_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    rel_30 <- calc_relapse_mort_timepoint(cr_data, 30)
+    rel_100 <- calc_relapse_mort_timepoint(cr_data, 100)
+    rel_365 <- calc_relapse_mort_timepoint(cr_data, 365)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = rel_30$n_total,
+      
+      Relapse_30d = rel_30$n_relapse,
+      Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+      
+      Relapse_100d = rel_100$n_relapse,
+      Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+      
+      Relapse_365d = rel_365$n_relapse,
+      Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+    )
+    
+    relapse_cr_results <- bind_rows(relapse_cr_results, cr_result)
+  }
+}
+
+kable(relapse_cr_results,
+      col.names = c("Disease Status", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### Relapse Mortality by Donor Type
+
+```{r relapse-by-donor}
+relapse_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    rel_30 <- calc_relapse_mort_timepoint(donor_data, 30)
+    rel_100 <- calc_relapse_mort_timepoint(donor_data, 100)
+    rel_365 <- calc_relapse_mort_timepoint(donor_data, 365)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = rel_30$n_total,
+      
+      Relapse_30d = rel_30$n_relapse,
+      Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+      
+      Relapse_100d = rel_100$n_relapse,
+      Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+      
+      Relapse_365d = rel_365$n_relapse,
+      Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+    )
+    
+    relapse_donor_results <- bind_rows(relapse_donor_results, donor_result)
+  }
+}
+
+kable(relapse_donor_results,
+      col.names = c("Donor Type", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+### Relapse Mortality by Donor Type and CR Status
+
+```{r relapse-by-donor-cr}
+relapse_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        rel_30 <- calc_relapse_mort_timepoint(donor_data, 30)
+        rel_100 <- calc_relapse_mort_timepoint(donor_data, 100)
+        rel_365 <- calc_relapse_mort_timepoint(donor_data, 365)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = rel_30$n_total,
+          
+          Relapse_30d = rel_30$n_relapse,
+          Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+          
+          Relapse_100d = rel_100$n_relapse,
+          Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+          
+          Relapse_365d = rel_365$n_relapse,
+          Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+        )
+        
+        relapse_donor_cr_strat <- bind_rows(relapse_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(relapse_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+# GVHD Endpoints - Cumulative 2025
+
+## Acute GVHD Grade II-IV
+
+### Acute GVHD - All Patients
+
+```{r acute-gvhd-overall}
+acute_overall <- calc_acute_gvhd_ii_iv(transplant_2025)
+
+acute_overall_results <- tibble(
+  Metric = c("Total Patients", "Acute GVHD II-IV Events", "Acute GVHD II-IV Rate"),
+  Value = c(
+    acute_overall$n_total,
+    acute_overall$n_events,
+    paste0(acute_overall$n_events, "/", acute_overall$n_total, " (", acute_overall$rate_pct, "%)")
+  )
+)
+
+kable(acute_overall_results,
+      col.names = c("Metric", "Value"),
+      caption = "Acute GVHD Grade II-IV - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Acute GVHD by Complete Remission Status
+
+```{r acute-gvhd-by-cr}
+acute_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    acute <- calc_acute_gvhd_ii_iv(cr_data)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = acute$n_total,
+      Events = acute$n_events,
+      Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+    )
+    
+    acute_cr_results <- bind_rows(acute_cr_results, cr_result)
+  }
+}
+
+kable(acute_cr_results,
+      col.names = c("Disease Status", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Acute GVHD by Donor Type
+
+```{r acute-gvhd-by-donor}
+acute_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    acute <- calc_acute_gvhd_ii_iv(donor_data)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = acute$n_total,
+      Events = acute$n_events,
+      Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+    )
+    
+    acute_donor_results <- bind_rows(acute_donor_results, donor_result)
+  }
+}
+
+kable(acute_donor_results,
+      col.names = c("Donor Type", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Acute GVHD by Donor Type and CR Status
+
+```{r acute-gvhd-by-donor-cr}
+acute_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        acute <- calc_acute_gvhd_ii_iv(donor_data)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = acute$n_total,
+          Events = acute$n_events,
+          Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+        )
+        
+        acute_donor_cr_strat <- bind_rows(acute_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(acute_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Total/Any)
+
+### Chronic GVHD (Any) - All Patients
+
+```{r chronic-any-overall}
+chronic_any_overall <- calc_chronic_gvhd_any(transplant_2025)
+
+chronic_any_overall_results <- tibble(
+  Metric = c("Total Patients", "Chronic GVHD (Any) Events", "Chronic GVHD (Any) Rate"),
+  Value = c(
+    chronic_any_overall$n_total,
+    chronic_any_overall$n_events,
+    paste0(chronic_any_overall$n_events, "/", chronic_any_overall$n_total, " (", chronic_any_overall$rate_pct, "%)")
+  )
+)
+
+kable(chronic_any_overall_results,
+      col.names = c("Metric", "Value"),
+      caption = "Chronic GVHD (Any) - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Any) by Complete Remission Status
+
+```{r chronic-any-by-cr}
+chronic_any_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    chronic <- calc_chronic_gvhd_any(cr_data)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_any_cr_results <- bind_rows(chronic_any_cr_results, cr_result)
+  }
+}
+
+kable(chronic_any_cr_results,
+      col.names = c("Disease Status", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Any) by Donor Type
+
+```{r chronic-any-by-donor}
+chronic_any_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    chronic <- calc_chronic_gvhd_any(donor_data)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_any_donor_results <- bind_rows(chronic_any_donor_results, donor_result)
+  }
+}
+
+kable(chronic_any_donor_results,
+      col.names = c("Donor Type", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Any) by Donor Type and CR Status
+
+```{r chronic-any-by-donor-cr}
+chronic_any_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        chronic <- calc_chronic_gvhd_any(donor_data)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = chronic$n_total,
+          Events = chronic$n_events,
+          Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+        )
+        
+        chronic_any_donor_cr_strat <- bind_rows(chronic_any_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(chronic_any_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Mild)
+
+### Chronic GVHD (Mild) - All Patients
+
+```{r chronic-mild-overall}
+chronic_mild_overall <- calc_chronic_gvhd_mild(transplant_2025)
+
+chronic_mild_overall_results <- tibble(
+  Metric = c("Total Patients", "Chronic GVHD (Mild) Events", "Chronic GVHD (Mild) Rate"),
+  Value = c(
+    chronic_mild_overall$n_total,
+    chronic_mild_overall$n_events,
+    paste0(chronic_mild_overall$n_events, "/", chronic_mild_overall$n_total, " (", chronic_mild_overall$rate_pct, "%)")
+  )
+)
+
+kable(chronic_mild_overall_results,
+      col.names = c("Metric", "Value"),
+      caption = "Chronic GVHD (Mild) - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Mild) by Complete Remission Status
+
+```{r chronic-mild-by-cr}
+chronic_mild_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    chronic <- calc_chronic_gvhd_mild(cr_data)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_mild_cr_results <- bind_rows(chronic_mild_cr_results, cr_result)
+  }
+}
+
+kable(chronic_mild_cr_results,
+      col.names = c("Disease Status", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Mild) by Donor Type
+
+```{r chronic-mild-by-donor}
+chronic_mild_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    chronic <- calc_chronic_gvhd_mild(donor_data)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_mild_donor_results <- bind_rows(chronic_mild_donor_results, donor_result)
+  }
+}
+
+kable(chronic_mild_donor_results,
+      col.names = c("Donor Type", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Mild) by Donor Type and CR Status
+
+```{r chronic-mild-by-donor-cr}
+chronic_mild_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        chronic <- calc_chronic_gvhd_mild(donor_data)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = chronic$n_total,
+          Events = chronic$n_events,
+          Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+        )
+        
+        chronic_mild_donor_cr_strat <- bind_rows(chronic_mild_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(chronic_mild_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Moderate-Severe)
+
+### Chronic GVHD (Moderate-Severe) - All Patients
+
+```{r chronic-mod-severe-overall}
+chronic_mod_severe_overall <- calc_chronic_gvhd_mod_severe(transplant_2025)
+
+chronic_mod_severe_overall_results <- tibble(
+  Metric = c("Total Patients", "Chronic GVHD (Mod-Severe) Events", "Chronic GVHD (Mod-Severe) Rate"),
+  Value = c(
+    chronic_mod_severe_overall$n_total,
+    chronic_mod_severe_overall$n_events,
+    paste0(chronic_mod_severe_overall$n_events, "/", chronic_mod_severe_overall$n_total, " (", chronic_mod_severe_overall$rate_pct, "%)")
+  )
+)
+
+kable(chronic_mod_severe_overall_results,
+      col.names = c("Metric", "Value"),
+      caption = "Chronic GVHD (Moderate-Severe) - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Moderate-Severe) by Complete Remission Status
+
+```{r chronic-mod-severe-by-cr}
+chronic_mod_severe_cr_results <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    chronic <- calc_chronic_gvhd_mod_severe(cr_data)
+    
+    cr_result <- tibble(
+      Status = cr_status,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_mod_severe_cr_results <- bind_rows(chronic_mod_severe_cr_results, cr_result)
+  }
+}
+
+kable(chronic_mod_severe_cr_results,
+      col.names = c("Disease Status", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Moderate-Severe) by Donor Type
+
+```{r chronic-mod-severe-by-donor}
+chronic_mod_severe_donor_results <- tibble()
+
+for(donor in donor_types) {
+  donor_data <- transplant_2025 |> filter(donor_type_main == donor)
+  
+  if(nrow(donor_data) > 0) {
+    chronic <- calc_chronic_gvhd_mod_severe(donor_data)
+    
+    donor_result <- tibble(
+      Donor_Type = donor,
+      N = chronic$n_total,
+      Events = chronic$n_events,
+      Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+    )
+    
+    chronic_mod_severe_donor_results <- bind_rows(chronic_mod_severe_donor_results, donor_result)
+  }
+}
+
+kable(chronic_mod_severe_donor_results,
+      col.names = c("Donor Type", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Donor Type - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+### Chronic GVHD (Moderate-Severe) by Donor Type and CR Status
+
+```{r chronic-mod-severe-by-donor-cr}
+chronic_mod_severe_donor_cr_strat <- tibble()
+
+for(cr_status in cr_groups) {
+  cr_data <- transplant_2025 |> filter(disease_status_binary == cr_status)
+  
+  if(nrow(cr_data) > 0) {
+    donor_types_cr <- unique(cr_data$donor_type_main)
+    
+    for(donor in donor_types_cr) {
+      donor_data <- cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        chronic <- calc_chronic_gvhd_mod_severe(donor_data)
+        
+        donor_cr_result <- tibble(
+          CR_Status = cr_status,
+          Donor_Type = donor,
+          N = chronic$n_total,
+          Events = chronic$n_events,
+          Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+        )
+        
+        chronic_mod_severe_donor_cr_strat <- bind_rows(chronic_mod_severe_donor_cr_strat, donor_cr_result)
+      }
+    }
+  }
+}
+
+kable(chronic_mod_severe_donor_cr_strat,
+      col.names = c("CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Donor Type and Complete Remission Status - Cumulative 2025") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Summary and Key Findings
+
+## Comprehensive Endpoint Summary
+
+```{r comprehensive-summary}
+summary_all <- tibble(
+  Endpoint_Category = c(
+    "Overall Survival",
+    "Overall Survival",
+    "Overall Survival",
+    "Mortality - NRM/TRM",
+    "Mortality - NRM/TRM",
+    "Mortality - NRM/TRM",
+    "Mortality - Relapse",
+    "Mortality - Relapse",
+    "Mortality - Relapse",
+    "GVHD - Acute II-IV",
+    "GVHD - Chronic (Any)",
+    "GVHD - Chronic (Mild)",
+    "GVHD - Chronic (Mod-Severe)"
+  ),
+  Endpoint = c(
+    "OS at Day 30",
+    "OS at Day 100",
+    "OS at Day 365",
+    "NRM/TRM at Day 30",
+    "NRM/TRM at Day 100",
+    "NRM/TRM at Day 365",
+    "Relapse Death at Day 30",
+    "Relapse Death at Day 100",
+    "Relapse Death at Day 365",
+    "Acute GVHD Grade II-IV",
+    "Chronic GVHD (Total)",
+    "Chronic GVHD (Mild)",
+    "Chronic GVHD (Mod-Severe)"
+  ),
+  Events_or_Alive = c(
+    paste0(calc_os_simple(transplant_2025, 30)$n_alive, " alive"),
+    paste0(calc_os_simple(transplant_2025, 100)$n_alive, " alive"),
+    paste0(calc_os_simple(transplant_2025, 365)$n_alive, " alive"),
+    paste0(calc_nrm_timepoint(transplant_2025, 30)$n_nrm, " events"),
+    paste0(calc_nrm_timepoint(transplant_2025, 100)$n_nrm, " events"),
+    paste0(calc_nrm_timepoint(transplant_2025, 365)$n_nrm, " events"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 30)$n_relapse, " events"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 100)$n_relapse, " events"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 365)$n_relapse, " events"),
+    paste0(calc_acute_gvhd_ii_iv(transplant_2025)$n_events, " events"),
+    paste0(calc_chronic_gvhd_any(transplant_2025)$n_events, " events"),
+    paste0(calc_chronic_gvhd_mild(transplant_2025)$n_events, " events"),
+    paste0(calc_chronic_gvhd_mod_severe(transplant_2025)$n_events, " events")
+  ),
+  Rate = c(
+    paste0(calc_os_simple(transplant_2025, 30)$os_pct, "%"),
+    paste0(calc_os_simple(transplant_2025, 100)$os_pct, "%"),
+    paste0(calc_os_simple(transplant_2025, 365)$os_pct, "%"),
+    paste0(calc_nrm_timepoint(transplant_2025, 30)$nrm_pct, "%"),
+    paste0(calc_nrm_timepoint(transplant_2025, 100)$nrm_pct, "%"),
+    paste0(calc_nrm_timepoint(transplant_2025, 365)$nrm_pct, "%"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 30)$relapse_pct, "%"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 100)$relapse_pct, "%"),
+    paste0(calc_relapse_mort_timepoint(transplant_2025, 365)$relapse_pct, "%"),
+    paste0(calc_acute_gvhd_ii_iv(transplant_2025)$rate_pct, "%"),
+    paste0(calc_chronic_gvhd_any(transplant_2025)$rate_pct, "%"),
+    paste0(calc_chronic_gvhd_mild(transplant_2025)$rate_pct, "%"),
+    paste0(calc_chronic_gvhd_mod_severe(transplant_2025)$rate_pct, "%")
+  )
+)
+
+kable(summary_all,
+      col.names = c("Category", "Endpoint", "Count", "Rate"),
+      caption = "Comprehensive Endpoint Summary - Cumulative 2025 (N=26)") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  pack_rows("Overall Survival", 1, 3) |>
+  pack_rows("Non-Relapse Mortality (NRM/TRM)", 4, 6) |>
+  pack_rows("Relapse-Related Mortality", 7, 9) |>
+  pack_rows("GVHD Endpoints", 10, 13)
+```
+
+## Key Observations
+
+```{r key-observations}
+cat("**Overall Survival:**\n")
+cat("- Day 30 OS: ", calc_os_simple(transplant_2025, 30)$os_pct, "%\n", sep = "")
+cat("- Day 100 OS: ", calc_os_simple(transplant_2025, 100)$os_pct, "%\n", sep = "")
+cat("- Day 365 OS: ", calc_os_simple(transplant_2025, 365)$os_pct, "%\n\n", sep = "")
+
+cat("**Mortality Endpoints:**\n")
+cat("- NRM/TRM Events: ", sum(transplant_2025$is_nrm), " (", round(100 * mean(transplant_2025$is_nrm), 1), "%)\n", sep = "")
+cat("- Relapse Deaths: ", sum(transplant_2025$is_relapse_death), " (", round(100 * mean(transplant_2025$is_relapse_death), 1), "%)\n", sep = "")
+cat("- Total Deaths: ", sum(transplant_2025$death), " (", round(100 * mean(transplant_2025$death), 1), "%)\n\n", sep = "")
+
+cat("**GVHD Endpoints:**\n")
+cat("- Acute GVHD Grade II-IV: ", sum(transplant_2025$acute_gvhd_grade_ii_iv), " (", round(100 * mean(transplant_2025$acute_gvhd_grade_ii_iv), 1), "%)\n", sep = "")
+cat("- Chronic GVHD (Any): ", sum(transplant_2025$chronic_gvhd_any), " (", round(100 * mean(transplant_2025$chronic_gvhd_any), 1), "%)\n", sep = "")
+cat("- Chronic GVHD (Mild): ", sum(transplant_2025$chronic_gvhd_mild), " (", round(100 * mean(transplant_2025$chronic_gvhd_mild), 1), "%)\n", sep = "")
+cat("- Chronic GVHD (Moderate-Severe): ", sum(transplant_2025$chronic_gvhd_mod_severe), " (", round(100 * mean(transplant_2025$chronic_gvhd_mod_severe), 1), "%)\n", sep = "")
+```
+
+::: {.callout-important}
+## Important Limitations
+
+**Limited Follow-up Period:**
+
+- Cohort includes all 2025 transplants with varying follow-up times
+- Median follow-up: `r round(median(transplant_2025$days_to_event))` days
+- Q1 patients: Longest follow-up (up to ~12 months)
+- Q4 patients: Minimal follow-up (1-3 months)
+
+**Interpretation Considerations:**
+
+- **Early endpoints (Day 30, Day 100)**: More reliable across all patients
+- **One-year endpoints (Day 365)**: Should be interpreted with caution
+  - Not all patients have reached 365 days post-transplant
+  - True rates may be underestimated
+- **Chronic GVHD rates**: Likely underestimated
+  - Chronic GVHD typically manifests 3-12+ months post-transplant
+  - Q3 and Q4 patients have insufficient follow-up time
+- **Longer follow-up needed**: For definitive assessment of long-term outcomes
+:::
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*This cumulative analysis includes all patients transplanted during calendar year 2025 (N=`r nrow(transplant_2025)`)*
+
+*Analysis covers: Overall Survival, Non-Relapse Mortality, Transplant-Related Mortality, Relapse-Related Mortality, and GVHD endpoints*
