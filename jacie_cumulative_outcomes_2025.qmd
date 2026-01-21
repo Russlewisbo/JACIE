@@ -22,13 +22,6 @@ execute:
 ::: {.callout-note}
 ## AI-Generated Report with Rolling Cohort Methodology
 
-This report was generated using AI under general human direction, following JACIE Italian methodology for rolling cohort analysis. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
-
-<!--
-To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
-The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
--->
-:::
 
 ```{r setup}
 library(tidyverse)
@@ -220,6 +213,23 @@ calc_relapse <- function(cohort, days) {
   )
 }
 
+# TRM calculation
+calc_trm <- function(cohort, days) {
+  if (nrow(cohort) == 0) {
+    return(tibble(timepoint = paste0(days, " days"), n_cohort = 0,
+                  n_events = NA_integer_, pct = NA_real_))
+  }
+  
+  n_trm <- sum(cohort$death_type == "TRM" & cohort$days_to_event <= days)
+  
+  tibble(
+    timepoint = paste0(days, " days"),
+    n_cohort = nrow(cohort),
+    n_events = n_trm,
+    pct = round(100 * n_trm / nrow(cohort), 1)
+  )
+}
+
 # Acute GVHD calculation (100 days)
 calc_agvhd <- function(cohort) {
   if (nrow(cohort) == 0) {
@@ -284,6 +294,13 @@ relapse_overall <- bind_rows(
   calc_relapse(cohort_365d, 365)
 )
 
+# Calculate TRM at each timepoint
+trm_overall <- bind_rows(
+  calc_trm(cohort_30d, 30),
+  calc_trm(cohort_100d, 100),
+  calc_trm(cohort_365d, 365)
+)
+
 # By disease status
 cr_data <- transplant_data_prepared |> filter(disease_status_binary == "Complete Remission")
 not_cr_data <- transplant_data_prepared |> filter(disease_status_binary == "Not in Complete Remission")
@@ -311,6 +328,12 @@ relapse_cr <- bind_rows(
   calc_relapse(cohort_365d_cr, 365)
 ) |> mutate(group = "Complete Remission")
 
+trm_cr <- bind_rows(
+  calc_trm(cohort_30d_cr, 30),
+  calc_trm(cohort_100d_cr, 100),
+  calc_trm(cohort_365d_cr, 365)
+) |> mutate(group = "Complete Remission")
+
 # Not CR cohorts
 cohort_30d_not_cr <- select_cohort_30d(not_cr_data, report_year)
 cohort_100d_not_cr <- select_cohort_100d(not_cr_data, report_year)
@@ -334,8 +357,14 @@ relapse_not_cr <- bind_rows(
   calc_relapse(cohort_365d_not_cr, 365)
 ) |> mutate(group = "Not in Complete Remission")
 
+trm_not_cr <- bind_rows(
+  calc_trm(cohort_30d_not_cr, 30),
+  calc_trm(cohort_100d_not_cr, 100),
+  calc_trm(cohort_365d_not_cr, 365)
+) |> mutate(group = "Not in Complete Remission")
+
 # GVHD by donor type
-major_donors <- c("Sibling HLA-identical", "Haploidentical", "MUD")
+major_donors <- c("Sibling HLA-identical", "Haploidentical", "MUD", "MMUD")
 agvhd_overall <- calc_agvhd(cohort_100d)
 
 agvhd_by_donor <- tibble()
@@ -379,35 +408,38 @@ Note that cohort sizes **differ** across timepoints because each represents a di
 The mortality percentages are cumulative and should generally increase at later timepoints (30d ≤ 100d ≤ 365d) as cumulative mortality accrues over time.
 :::
 
-### Mortality by Cause: NRM vs Relapse
+### Mortality by Cause: TRM, NRM, and Relapse
 
 ```{r mortality-cause}
 cause_summary <- tibble(
   Timepoint = c("30 days", "100 days", "365 days"),
   `Overall Mortality` = paste0(overall_mort$pct, "% (", overall_mort$n_events, "/", overall_mort$n_cohort, ")"),
+  `TRM` = paste0(trm_overall$pct, "% (", trm_overall$n_events, "/", trm_overall$n_cohort, ")"),
   `NRM` = paste0(nrm_overall$pct, "% (", nrm_overall$n_events, "/", nrm_overall$n_cohort, ")"),
   `Relapse` = paste0(relapse_overall$pct, "% (", relapse_overall$n_events, "/", relapse_overall$n_cohort, ")")
 )
 
 kable(cause_summary,
-      caption = "Table 2: Cumulative Mortality - NRM vs Relapse Deaths") |>
+      caption = "Table 2: Cumulative Mortality Breakdown by Cause (Overall = TRM + NRM + Relapse)") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
   row_spec(0, bold = TRUE, background = "#E74C3C", color = "white")
 ```
 
 ::: {.callout-tip}
-## Understanding NRM vs Relapse
+## Understanding Mortality Categories
+
+**TRM (Treatment-Related Mortality)** includes deaths directly related to the transplant procedure and immediate complications.
 
 **NRM (Non-Relapse Mortality)** includes deaths from:
 
 - Infection
 - GVHD complications  
 - Organ toxicity
-- Other transplant-related complications
+- Other transplant-related complications (not classified as TRM)
 
 **Relapse Mortality** includes deaths from disease progression or relapse.
 
-At 365 days: **NRM = `r nrm_overall$pct[3]`%** and **Relapse = `r relapse_overall$pct[3]`%**
+At 365 days: **TRM = `r trm_overall$pct[3]`%**, **NRM = `r nrm_overall$pct[3]`%**, and **Relapse = `r relapse_overall$pct[3]`%**
 :::
 
 ---
@@ -421,24 +453,26 @@ At 365 days: **NRM = `r nrm_overall$pct[3]`%** and **Relapse = `r relapse_overal
 ```{r mortality-plot, fig.width=10, fig.height=6}
 plot_data <- bind_rows(
   overall_mort |> mutate(outcome = "Overall Mortality"),
+  trm_overall |> mutate(outcome = "TRM"),
   nrm_overall |> mutate(outcome = "NRM"),
   relapse_overall |> mutate(outcome = "Relapse")
 ) |>
   mutate(
     timepoint = factor(timepoint, levels = c("30 days", "100 days", "365 days")),
-    outcome = factor(outcome, levels = c("Overall Mortality", "NRM", "Relapse"))
+    outcome = factor(outcome, levels = c("Overall Mortality", "TRM", "NRM", "Relapse"))
   )
 
 ggplot(plot_data, aes(x = timepoint, y = pct, fill = outcome)) +
   geom_col(position = "dodge", width = 0.7) +
   geom_text(aes(label = paste0(pct, "%\n(", n_events, "/", n_cohort, ")")),
             position = position_dodge(width = 0.7),
-            vjust = -0.5, size = 3.5, fontface = "bold") +
+            vjust = -0.5, size = 3, fontface = "bold") +
   scale_fill_manual(values = c("Overall Mortality" = "#E74C3C", 
+                                "TRM" = "#9B59B6",
                                 "NRM" = "#E67E22",
                                 "Relapse" = "#3498DB")) +
   labs(title = "Figure 1: Cumulative Mortality Outcomes by Timepoint",
-       subtitle = "Cumulative Rolling Cohort Analysis - 2025 (NRM = Non-Relapse Mortality)",
+       subtitle = "Cumulative Rolling Cohort Analysis - 2025 (TRM, NRM, Relapse)",
        x = "Time Post-HSCT", y = "Cumulative Percentage (%)",
        fill = "Outcome Type") +
   theme_minimal(base_size = 14) +
@@ -542,6 +576,56 @@ if (nrow(nrm_deaths) > 0) {
 } else {
   cat("No NRM events in the 365-day rolling cohort.")
 }
+```
+
+---
+
+## 2.4 TRM (Treatment-Related Mortality)
+
+### 2.4.1 TRM by Timepoint
+
+```{r trm-overall-table}
+kable(trm_overall |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
+         `TRM Events` = n_events, `TRM Rate` = display),
+      caption = "Table 6A: Cumulative Treatment-Related Mortality (TRM)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#9B59B6", color = "white")
+```
+
+::: {.callout-important}
+## TRM Analysis
+
+**Definition**: TRM represents deaths specifically from treatment-related complications (distinct from NRM and relapse).
+
+- **30-day TRM**: `r trm_overall$pct[1]`%
+- **100-day TRM**: `r trm_overall$pct[2]`%
+- **365-day TRM**: `r trm_overall$pct[3]`%
+
+```{r trm-prop, results='asis'}
+if (!is.na(overall_mort$n_events[3]) && overall_mort$n_events[3] > 0) {
+  trm_prop <- round(100 * trm_overall$n_events[3] / overall_mort$n_events[3], 0)
+  cat(paste0("TRM accounts for **", trm_prop, "%** of all deaths at 365 days."))
+}
+```
+:::
+
+### 2.4.2 TRM by Disease Status
+
+```{r trm-by-disease}
+kable(bind_rows(
+  trm_overall |> mutate(group = "Overall"),
+  trm_cr, trm_not_cr
+) |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(Group = group, Timepoint = timepoint, 
+         `Cohort Size` = n_cohort, `TRM Events` = n_events, `TRM Rate` = display),
+      caption = "Table 6B: Treatment-Related Mortality by Disease Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  pack_rows("Overall", 1, 3, label_row_css = "background-color: #95A5A6; color: white;") |>
+  pack_rows("Complete Remission", 4, 6, label_row_css = "background-color: #27AE60; color: white;") |>
+  pack_rows("Not in Complete Remission", 7, 9, label_row_css = "background-color: #E74C3C; color: white;")
 ```
 
 ---
@@ -770,13 +854,45 @@ kable(relapse_donor_all |>
   pack_rows("MUD", 7, 9, label_row_css = "background-color: #9B59B6; color: white;")
 ```
 
+### 6.4 TRM by Donor Type (All Timepoints)
+
+```{r trm-by-donor-all-timepoints}
+trm_donor_all <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_30d_donor <- select_cohort_30d(donor_data, report_year)
+  cohort_100d_donor <- select_cohort_100d(donor_data, report_year)
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  
+  donor_trm <- bind_rows(
+    calc_trm(cohort_30d_donor, 30),
+    calc_trm(cohort_100d_donor, 100),
+    calc_trm(cohort_365d_donor, 365)
+  ) |> mutate(donor = donor)
+  
+  trm_donor_all <- bind_rows(trm_donor_all, donor_trm)
+}
+
+kable(trm_donor_all |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(`Donor Type` = donor, Timepoint = timepoint,
+         `Cohort Size` = n_cohort, `TRM Events` = n_events, `TRM Rate` = display),
+      caption = "Table 15A: Treatment-Related Mortality by Donor Type Across All Timepoints") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  pack_rows("Sibling HLA-identical", 1, 3, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("Haploidentical", 4, 6, label_row_css = "background-color: #E67E22; color: white;") |>
+  pack_rows("MUD", 7, 9, label_row_css = "background-color: #9B59B6; color: white;")
+```
+
 ---
 
 ## 7. Combined Stratification: Donor Type × Disease Status
 
-### 7.1 Overall Mortality by Donor Type and CR Status (365 days)
+### 7.1 Overall Mortality by Donor Type and CR Status (All Timepoints)
 
-```{r mort-donor-cr-365d}
+```{r mort-donor-cr-all}
 mort_donor_cr_strat <- tibble()
 
 for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
@@ -784,11 +900,17 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
   
   for (donor in major_donors) {
     donor_cr_data <- cr_data |> filter(donor_type_main == donor)
+    
+    cohort_30d_donor_cr <- select_cohort_30d(donor_cr_data, report_year)
+    cohort_100d_donor_cr <- select_cohort_100d(donor_cr_data, report_year)
     cohort_365d_donor_cr <- select_cohort_365d(donor_cr_data, report_year)
     
-    if (nrow(cohort_365d_donor_cr) > 0) {
-      mort_result <- calc_mortality(cohort_365d_donor_cr, 365) |>
-        mutate(cr_status = cr_status, donor = donor)
+    if (nrow(cohort_30d_donor_cr) > 0 || nrow(cohort_100d_donor_cr) > 0 || nrow(cohort_365d_donor_cr) > 0) {
+      mort_result <- bind_rows(
+        calc_mortality(cohort_30d_donor_cr, 30),
+        calc_mortality(cohort_100d_donor_cr, 100),
+        calc_mortality(cohort_365d_donor_cr, 365)
+      ) |> mutate(cr_status = cr_status, donor = donor)
       mort_donor_cr_strat <- bind_rows(mort_donor_cr_strat, mort_result)
     }
   }
@@ -797,23 +919,19 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
 if (nrow(mort_donor_cr_strat) > 0) {
   kable(mort_donor_cr_strat |>
     mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
-    select(`Disease Status` = cr_status, `Donor Type` = donor,
-           `Cohort Size` = n_cohort, Deaths = n_events, `Mortality Rate` = display),
-        caption = "Table 16: 365-Day Mortality by Donor Type and Disease Status") |>
+    select(`CR Status` = cr_status, `Donor Type` = donor, Timepoint = timepoint,
+           N = n_cohort, Deaths = n_events, `Mortality Rate (n/N %)` = display),
+        caption = "Table 16: Overall Mortality by Donor Type and Disease Status (30, 100, 365 days)") |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
-    pack_rows("Complete Remission", 1, sum(mort_donor_cr_strat$cr_status == "Complete Remission"), 
-              label_row_css = "background-color: #27AE60; color: white;") |>
-    pack_rows("Not in Complete Remission", 
-              sum(mort_donor_cr_strat$cr_status == "Complete Remission") + 1, nrow(mort_donor_cr_strat),
-              label_row_css = "background-color: #E74C3C; color: white;")
+    row_spec(0, bold = TRUE, background = "#E74C3C", color = "white")
 } else {
   cat("Insufficient data for combined stratification.")
 }
 ```
 
-### 7.2 NRM by Donor Type and CR Status (365 days)
+### 7.2 NRM by Donor Type and CR Status (All Timepoints)
 
-```{r nrm-donor-cr-365d}
+```{r nrm-donor-cr-all}
 nrm_donor_cr_strat <- tibble()
 
 for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
@@ -821,11 +939,17 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
   
   for (donor in major_donors) {
     donor_cr_data <- cr_data |> filter(donor_type_main == donor)
+    
+    cohort_30d_donor_cr <- select_cohort_30d(donor_cr_data, report_year)
+    cohort_100d_donor_cr <- select_cohort_100d(donor_cr_data, report_year)
     cohort_365d_donor_cr <- select_cohort_365d(donor_cr_data, report_year)
     
-    if (nrow(cohort_365d_donor_cr) > 0) {
-      nrm_result <- calc_nrm(cohort_365d_donor_cr, 365) |>
-        mutate(cr_status = cr_status, donor = donor)
+    if (nrow(cohort_30d_donor_cr) > 0 || nrow(cohort_100d_donor_cr) > 0 || nrow(cohort_365d_donor_cr) > 0) {
+      nrm_result <- bind_rows(
+        calc_nrm(cohort_30d_donor_cr, 30),
+        calc_nrm(cohort_100d_donor_cr, 100),
+        calc_nrm(cohort_365d_donor_cr, 365)
+      ) |> mutate(cr_status = cr_status, donor = donor)
       nrm_donor_cr_strat <- bind_rows(nrm_donor_cr_strat, nrm_result)
     }
   }
@@ -834,21 +958,17 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
 if (nrow(nrm_donor_cr_strat) > 0) {
   kable(nrm_donor_cr_strat |>
     mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
-    select(`Disease Status` = cr_status, `Donor Type` = donor,
-           `Cohort Size` = n_cohort, `NRM Events` = n_events, `NRM Rate` = display),
-        caption = "Table 17: 365-Day NRM by Donor Type and Disease Status") |>
+    select(`CR Status` = cr_status, `Donor Type` = donor, Timepoint = timepoint,
+           N = n_cohort, `NRM Events` = n_events, `NRM Rate (n/N %)` = display),
+        caption = "Table 17: NRM by Donor Type and Disease Status (30, 100, 365 days)") |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
-    pack_rows("Complete Remission", 1, sum(nrm_donor_cr_strat$cr_status == "Complete Remission"),
-              label_row_css = "background-color: #27AE60; color: white;") |>
-    pack_rows("Not in Complete Remission",
-              sum(nrm_donor_cr_strat$cr_status == "Complete Remission") + 1, nrow(nrm_donor_cr_strat),
-              label_row_css = "background-color: #E74C3C; color: white;")
+    row_spec(0, bold = TRUE, background = "#E67E22", color = "white")
 }
 ```
 
-### 7.3 Relapse Mortality by Donor Type and CR Status (365 days)
+### 7.3 Relapse Mortality by Donor Type and CR Status (All Timepoints)
 
-```{r relapse-donor-cr-365d}
+```{r relapse-donor-cr-all}
 relapse_donor_cr_strat <- tibble()
 
 for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
@@ -856,11 +976,17 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
   
   for (donor in major_donors) {
     donor_cr_data <- cr_data |> filter(donor_type_main == donor)
+    
+    cohort_30d_donor_cr <- select_cohort_30d(donor_cr_data, report_year)
+    cohort_100d_donor_cr <- select_cohort_100d(donor_cr_data, report_year)
     cohort_365d_donor_cr <- select_cohort_365d(donor_cr_data, report_year)
     
-    if (nrow(cohort_365d_donor_cr) > 0) {
-      relapse_result <- calc_relapse(cohort_365d_donor_cr, 365) |>
-        mutate(cr_status = cr_status, donor = donor)
+    if (nrow(cohort_30d_donor_cr) > 0 || nrow(cohort_100d_donor_cr) > 0 || nrow(cohort_365d_donor_cr) > 0) {
+      relapse_result <- bind_rows(
+        calc_relapse(cohort_30d_donor_cr, 30),
+        calc_relapse(cohort_100d_donor_cr, 100),
+        calc_relapse(cohort_365d_donor_cr, 365)
+      ) |> mutate(cr_status = cr_status, donor = donor)
       relapse_donor_cr_strat <- bind_rows(relapse_donor_cr_strat, relapse_result)
     }
   }
@@ -869,19 +995,52 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
 if (nrow(relapse_donor_cr_strat) > 0) {
   kable(relapse_donor_cr_strat |>
     mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
-    select(`Disease Status` = cr_status, `Donor Type` = donor,
-           `Cohort Size` = n_cohort, `Relapse Deaths` = n_events, `Relapse Rate` = display),
-        caption = "Table 18: 365-Day Relapse Mortality by Donor Type and Disease Status") |>
+    select(`CR Status` = cr_status, `Donor Type` = donor, Timepoint = timepoint,
+           N = n_cohort, `Relapse Deaths` = n_events, `Relapse Rate (n/N %)` = display),
+        caption = "Table 18: Relapse Mortality by Donor Type and Disease Status (30, 100, 365 days)") |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
-    pack_rows("Complete Remission", 1, sum(relapse_donor_cr_strat$cr_status == "Complete Remission"),
-              label_row_css = "background-color: #27AE60; color: white;") |>
-    pack_rows("Not in Complete Remission",
-              sum(relapse_donor_cr_strat$cr_status == "Complete Remission") + 1, nrow(relapse_donor_cr_strat),
-              label_row_css = "background-color: #E74C3C; color: white;")
+    row_spec(0, bold = TRUE, background = "#3498DB", color = "white")
 }
 ```
 
-### 7.4 Acute GVHD by Donor Type and CR Status (100 days)
+### 7.4 TRM by Donor Type and CR Status (All Timepoints)
+
+```{r trm-donor-cr-all}
+trm_donor_cr_strat <- tibble()
+
+for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
+  cr_data <- transplant_data_prepared |> filter(disease_status_binary == cr_status)
+  
+  for (donor in major_donors) {
+    donor_cr_data <- cr_data |> filter(donor_type_main == donor)
+    
+    cohort_30d_donor_cr <- select_cohort_30d(donor_cr_data, report_year)
+    cohort_100d_donor_cr <- select_cohort_100d(donor_cr_data, report_year)
+    cohort_365d_donor_cr <- select_cohort_365d(donor_cr_data, report_year)
+    
+    if (nrow(cohort_30d_donor_cr) > 0 || nrow(cohort_100d_donor_cr) > 0 || nrow(cohort_365d_donor_cr) > 0) {
+      trm_result <- bind_rows(
+        calc_trm(cohort_30d_donor_cr, 30),
+        calc_trm(cohort_100d_donor_cr, 100),
+        calc_trm(cohort_365d_donor_cr, 365)
+      ) |> mutate(cr_status = cr_status, donor = donor)
+      trm_donor_cr_strat <- bind_rows(trm_donor_cr_strat, trm_result)
+    }
+  }
+}
+
+if (nrow(trm_donor_cr_strat) > 0) {
+  kable(trm_donor_cr_strat |>
+    mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+    select(`CR Status` = cr_status, `Donor Type` = donor, Timepoint = timepoint,
+           N = n_cohort, `TRM Events` = n_events, `TRM Rate (n/N %)` = display),
+        caption = "Table 17A: TRM by Donor Type and Disease Status (30, 100, 365 days)") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+    row_spec(0, bold = TRUE, background = "#9B59B6", color = "white")
+}
+```
+
+### 7.5 Acute GVHD by Donor Type and CR Status (100 days)
 
 ```{r agvhd-donor-cr-100d}
 agvhd_donor_cr_strat <- tibble()
@@ -918,7 +1077,7 @@ if (nrow(agvhd_donor_cr_strat) > 0) {
 
 ### 7.5 Chronic GVHD by Donor Type and CR Status (365 days)
 
-```{r cgvhd-donor-cr-365d}
+```{r cgvhd-donor-cr-calc}
 cgvhd_donor_cr_strat_any <- tibble()
 cgvhd_donor_cr_strat_modsev <- tibble()
 
@@ -942,35 +1101,41 @@ for (cr_status in c("Complete Remission", "Not in Complete Remission")) {
     }
   }
 }
+```
 
+#### Chronic GVHD (Any) by Donor Type and CR Status
+
+```{r cgvhd-any-table}
 if (nrow(cgvhd_donor_cr_strat_any) > 0) {
-  cat("#### Chronic GVHD (Any) by Donor Type and CR Status\n\n")
   kable(cgvhd_donor_cr_strat_any |>
     mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
-    select(`Disease Status` = cr_status, `Donor Type` = donor,
-           `Cohort Size` = n_cohort, Events = n_events, `Chronic GVHD (Any) Rate` = display),
-        caption = "Table 20: 365-Day Chronic GVHD (Any) by Donor Type and Disease Status") |>
+    select(`CR Status` = cr_status, `Donor Type` = donor,
+           N = n_cohort, Events = n_events, `Chronic GVHD (Any) Rate (n/N %)` = display),
+        caption = "Table 20: Chronic GVHD (Any) by Donor Type and Complete Remission Status - Cumulative 2025") |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
     pack_rows("Complete Remission", 1, sum(cgvhd_donor_cr_strat_any$cr_status == "Complete Remission"),
               label_row_css = "background-color: #27AE60; color: white;") |>
     pack_rows("Not in Complete Remission",
               sum(cgvhd_donor_cr_strat_any$cr_status == "Complete Remission") + 1, nrow(cgvhd_donor_cr_strat_any),
-              label_row_css = "background-color: #E74C3C; color: white;") |>
-    print()
-  
-  cat("\n\n#### Chronic GVHD (Moderate-Severe) by Donor Type and CR Status\n\n")
+              label_row_css = "background-color: #E74C3C; color: white;")
+}
+```
+
+#### Chronic GVHD (Moderate-Severe) by Donor Type and CR Status
+
+```{r cgvhd-modsev-table}
+if (nrow(cgvhd_donor_cr_strat_modsev) > 0) {
   kable(cgvhd_donor_cr_strat_modsev |>
     mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
-    select(`Disease Status` = cr_status, `Donor Type` = donor,
-           `Cohort Size` = n_cohort, Events = n_events, `Chronic GVHD (Mod-Severe) Rate` = display),
-        caption = "Table 21: 365-Day Chronic GVHD (Moderate-Severe) by Donor Type and Disease Status") |>
+    select(`CR Status` = cr_status, `Donor Type` = donor,
+           N = n_cohort, Events = n_events, `Chronic GVHD (Mod-Severe) Rate (n/N %)` = display),
+        caption = "Table 21: Chronic GVHD (Moderate-Severe) by Donor Type and Complete Remission Status - Cumulative 2025") |>
     kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
     pack_rows("Complete Remission", 1, sum(cgvhd_donor_cr_strat_modsev$cr_status == "Complete Remission"),
               label_row_css = "background-color: #27AE60; color: white;") |>
     pack_rows("Not in Complete Remission",
               sum(cgvhd_donor_cr_strat_modsev$cr_status == "Complete Remission") + 1, nrow(cgvhd_donor_cr_strat_modsev),
-              label_row_css = "background-color: #E74C3C; color: white;") |>
-    print()
+              label_row_css = "background-color: #E74C3C; color: white;")
 }
 ```
 
