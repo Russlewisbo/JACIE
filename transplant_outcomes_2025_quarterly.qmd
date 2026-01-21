@@ -1,0 +1,1115 @@
+---
+title: "HSCT Outcomes by Quarter: 2025 Transplant Cohort"
+subtitle: "Quarterly Analysis of Transplant Events and Outcomes"
+author: "Transplant Outcomes Analysis"
+date: "January 21, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Filter for 2025 transplants and add quarter
+transplant_2025 <- transplant_data |>
+  mutate(hsct_year = year(`HSCT date`)) |>
+  filter(hsct_year == 2025) |>
+  mutate(
+    # Death and follow-up variables
+    death_date_clean = case_when(
+      `Death date` == "-" ~ NA,
+      TRUE ~ as.Date(as.numeric(`Death date`), origin = "1899-12-30")
+    ),
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    
+    # Quarter (trimester) calculation
+    hsct_quarter = quarter(`HSCT date`),
+    quarter_label = paste0("Q", hsct_quarter, " ", year(`HSCT date`)),
+    
+    # Disease status categorization
+    disease_status_binary = case_when(
+      `Disease status at HSCT` == "Complete Remission" ~ "Complete Remission",
+      TRUE ~ "Not in Complete Remission"
+    ),
+    
+    # Donor type categorization
+    donor_type_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling HLA-identical",
+      `Donor type` == "Related Haploidentical" ~ "Haploidentical",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      `Donor type` == "URD HLA-mismatched" ~ "MMUD"
+    ),
+    
+    # Cause of death classification
+    death_cause = case_when(
+      death == 0 ~ "Alive",
+      grepl("disease", `State at last follow up`) ~ "Relapse",
+      grepl("GVHD", `State at last follow up`) ~ "TRM: GVHD",
+      grepl("infection", `State at last follow up`) ~ "TRM: Infection",
+      grepl("other cause", `State at last follow up`) ~ "TRM: Other",
+      TRUE ~ "TRM: Unknown"
+    )
+  )
+```
+
+# Executive Summary
+
+This report analyzes transplant outcomes for **`r nrow(transplant_2025)` patients** who underwent HSCT during calendar year 2025, broken down by quarter (trimester).
+
+**Quarterly Distribution:**
+
+```{r quarterly-summary}
+quarterly_dist <- transplant_2025 |>
+  count(quarter_label) |>
+  arrange(quarter_label)
+
+for(i in 1:nrow(quarterly_dist)) {
+  cat("- **", quarterly_dist$quarter_label[i], "**: ", quarterly_dist$n[i], " transplants\n", sep = "")
+}
+```
+
+**Overall Results:**
+
+- **Total Deaths**: `r sum(transplant_2025$death)` (`r round(100 * mean(transplant_2025$death), 1)`%)
+- **Overall Survival (all patients)**: `r round(100 * (1 - mean(transplant_2025$death)), 1)`%
+
+::: {.callout-warning}
+## Limited Follow-up Period
+This cohort has **limited follow-up time** with transplants occurring throughout 2025. Earlier quarters have longer follow-up, while Q4 2025 patients have minimal follow-up time. Results should be interpreted with caution, especially for late timepoints (365 days).
+:::
+
+---
+
+# Overall Analysis by Quarter
+
+## Cohort Characteristics by Quarter
+
+```{r cohort-by-quarter}
+# Function to calculate OS at specific timepoint using simple percentages
+calc_os_simple <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_deaths = NA_integer_,
+      n_alive = NA_integer_,
+      os_pct = NA_real_
+    ))
+  }
+  
+  n_deaths <- sum(data$death[data$days_to_event <= timepoint])
+  n_alive <- nrow(data) - n_deaths
+  os_pct <- round(100 * n_alive / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_deaths = n_deaths,
+    n_alive = n_alive,
+    os_pct = os_pct
+  ))
+}
+
+# Summary by quarter
+quarter_summary <- transplant_2025 |>
+  group_by(quarter_label) |>
+  summarise(
+    N = n(),
+    Deaths = sum(death),
+    Median_Age = round(median(`Age at HSCT`)),
+    Male_Female = paste0(sum(Gender == "M"), "/", sum(Gender == "F")),
+    CR = sum(disease_status_binary == "Complete Remission"),
+    Not_CR = sum(disease_status_binary == "Not in Complete Remission"),
+    Median_FU_days = round(median(days_to_event)),
+    .groups = "drop"
+  )
+
+kable(quarter_summary,
+      col.names = c("Quarter", "N Patients", "Deaths", "Median Age", "M/F", "CR", "Not CR", "Median F/U (days)"),
+      caption = "Cohort Characteristics by Quarter (2025)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Overall Survival by Quarter
+
+### Deaths and Survival at Key Timepoints
+
+```{r os-by-quarter}
+# Calculate for each quarter
+quarters <- sort(unique(transplant_2025$quarter_label))
+
+os_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  os_30 <- calc_os_simple(q_data, 30)
+  os_100 <- calc_os_simple(q_data, 100)
+  os_365 <- calc_os_simple(q_data, 365)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = os_30$n_total,
+    
+    Deaths_30d = os_30$n_deaths,
+    OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+    
+    Deaths_100d = os_100$n_deaths,
+    OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+    
+    Deaths_365d = os_365$n_deaths,
+    OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+  )
+  
+  os_results <- bind_rows(os_results, q_results)
+}
+
+kable(os_results,
+      col.names = c("Quarter", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival at 30, 100, and 365 Days by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+# Analysis by Complete Remission Status
+
+## Q1 2025: Complete Remission vs Not in CR
+
+```{r q1-by-cr}
+q1_data <- transplant_2025 |> filter(quarter_label == "Q1 2025")
+
+if(nrow(q1_data) > 0) {
+  cr_groups <- c("Complete Remission", "Not in Complete Remission")
+  
+  q1_cr_results <- tibble()
+  
+  for(cr_status in cr_groups) {
+    cr_data <- q1_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      os_30 <- calc_os_simple(cr_data, 30)
+      os_100 <- calc_os_simple(cr_data, 100)
+      os_365 <- calc_os_simple(cr_data, 365)
+      
+      cr_result <- tibble(
+        Status = cr_status,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q1_cr_results <- bind_rows(q1_cr_results, cr_result)
+    }
+  }
+  
+  kable(q1_cr_results,
+        col.names = c("Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q1 2025: Overall Survival by Complete Remission Status") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q1 2025\n")
+}
+```
+
+## Q2 2025: Complete Remission vs Not in CR
+
+```{r q2-by-cr}
+q2_data <- transplant_2025 |> filter(quarter_label == "Q2 2025")
+
+if(nrow(q2_data) > 0) {
+  q2_cr_results <- tibble()
+  
+  for(cr_status in cr_groups) {
+    cr_data <- q2_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      os_30 <- calc_os_simple(cr_data, 30)
+      os_100 <- calc_os_simple(cr_data, 100)
+      os_365 <- calc_os_simple(cr_data, 365)
+      
+      cr_result <- tibble(
+        Status = cr_status,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q2_cr_results <- bind_rows(q2_cr_results, cr_result)
+    }
+  }
+  
+  kable(q2_cr_results,
+        col.names = c("Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q2 2025: Overall Survival by Complete Remission Status") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q2 2025\n")
+}
+```
+
+## Q3 2025: Complete Remission vs Not in CR
+
+```{r q3-by-cr}
+q3_data <- transplant_2025 |> filter(quarter_label == "Q3 2025")
+
+if(nrow(q3_data) > 0) {
+  q3_cr_results <- tibble()
+  
+  for(cr_status in cr_groups) {
+    cr_data <- q3_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      os_30 <- calc_os_simple(cr_data, 30)
+      os_100 <- calc_os_simple(cr_data, 100)
+      os_365 <- calc_os_simple(cr_data, 365)
+      
+      cr_result <- tibble(
+        Status = cr_status,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q3_cr_results <- bind_rows(q3_cr_results, cr_result)
+    }
+  }
+  
+  kable(q3_cr_results,
+        col.names = c("Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q3 2025: Overall Survival by Complete Remission Status") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q3 2025\n")
+}
+```
+
+## Q4 2025: Complete Remission vs Not in CR
+
+```{r q4-by-cr}
+q4_data <- transplant_2025 |> filter(quarter_label == "Q4 2025")
+
+if(nrow(q4_data) > 0) {
+  q4_cr_results <- tibble()
+  
+  for(cr_status in cr_groups) {
+    cr_data <- q4_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      os_30 <- calc_os_simple(cr_data, 30)
+      os_100 <- calc_os_simple(cr_data, 100)
+      os_365 <- calc_os_simple(cr_data, 365)
+      
+      cr_result <- tibble(
+        Status = cr_status,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q4_cr_results <- bind_rows(q4_cr_results, cr_result)
+    }
+  }
+  
+  kable(q4_cr_results,
+        col.names = c("Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q4 2025: Overall Survival by Complete Remission Status") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q4 2025\n")
+}
+```
+
+---
+
+# Analysis by Donor Type
+
+## Q1 2025: By Donor Type
+
+```{r q1-by-donor}
+if(nrow(q1_data) > 0) {
+  donor_types <- unique(q1_data$donor_type_main)
+  
+  q1_donor_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- q1_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q1_donor_results <- bind_rows(q1_donor_results, donor_result)
+    }
+  }
+  
+  kable(q1_donor_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q1 2025: Overall Survival by Donor Type") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q1 2025\n")
+}
+```
+
+## Q2 2025: By Donor Type
+
+```{r q2-by-donor}
+if(nrow(q2_data) > 0) {
+  donor_types <- unique(q2_data$donor_type_main)
+  
+  q2_donor_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- q2_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q2_donor_results <- bind_rows(q2_donor_results, donor_result)
+    }
+  }
+  
+  kable(q2_donor_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q2 2025: Overall Survival by Donor Type") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q2 2025\n")
+}
+```
+
+## Q3 2025: By Donor Type
+
+```{r q3-by-donor}
+if(nrow(q3_data) > 0) {
+  donor_types <- unique(q3_data$donor_type_main)
+  
+  q3_donor_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- q3_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q3_donor_results <- bind_rows(q3_donor_results, donor_result)
+    }
+  }
+  
+  kable(q3_donor_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q3 2025: Overall Survival by Donor Type") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q3 2025\n")
+}
+```
+
+## Q4 2025: By Donor Type
+
+```{r q4-by-donor}
+if(nrow(q4_data) > 0) {
+  donor_types <- unique(q4_data$donor_type_main)
+  
+  q4_donor_results <- tibble()
+  
+  for(donor in donor_types) {
+    donor_data <- q4_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      q4_donor_results <- bind_rows(q4_donor_results, donor_result)
+    }
+  }
+  
+  kable(q4_donor_results,
+        col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+        caption = "Q4 2025: Overall Survival by Donor Type") |>
+    kable_styling(bootstrap_options = c("striped", "hover")) |>
+    add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+} else {
+  cat("No patients in Q4 2025\n")
+}
+```
+
+---
+
+# Analysis by Donor Type and Complete Remission Status
+
+## Q1 2025: Donor Type (Complete Remission Only)
+
+```{r q1-donor-cr}
+if(nrow(q1_data) > 0) {
+  q1_cr_data <- q1_data |> filter(disease_status_binary == "Complete Remission")
+  
+  if(nrow(q1_cr_data) > 0) {
+    donor_types <- unique(q1_cr_data$donor_type_main)
+    
+    q1_donor_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q1_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q1_donor_cr_results <- bind_rows(q1_donor_cr_results, donor_result)
+      }
+    }
+    
+    kable(q1_donor_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q1 2025: Overall Survival by Donor Type (Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No CR patients in Q1 2025\n")
+  }
+} else {
+  cat("No patients in Q1 2025\n")
+}
+```
+
+## Q1 2025: Donor Type (Not in Complete Remission Only)
+
+```{r q1-donor-not-cr}
+if(nrow(q1_data) > 0) {
+  q1_not_cr_data <- q1_data |> filter(disease_status_binary == "Not in Complete Remission")
+  
+  if(nrow(q1_not_cr_data) > 0) {
+    donor_types <- unique(q1_not_cr_data$donor_type_main)
+    
+    q1_donor_not_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q1_not_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q1_donor_not_cr_results <- bind_rows(q1_donor_not_cr_results, donor_result)
+      }
+    }
+    
+    kable(q1_donor_not_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q1 2025: Overall Survival by Donor Type (Not in Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No Not in CR patients in Q1 2025\n")
+  }
+} else {
+  cat("No patients in Q1 2025\n")
+}
+```
+
+## Q2 2025: Donor Type (Complete Remission Only)
+
+```{r q2-donor-cr}
+if(nrow(q2_data) > 0) {
+  q2_cr_data <- q2_data |> filter(disease_status_binary == "Complete Remission")
+  
+  if(nrow(q2_cr_data) > 0) {
+    donor_types <- unique(q2_cr_data$donor_type_main)
+    
+    q2_donor_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q2_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q2_donor_cr_results <- bind_rows(q2_donor_cr_results, donor_result)
+      }
+    }
+    
+    kable(q2_donor_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q2 2025: Overall Survival by Donor Type (Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No CR patients in Q2 2025\n")
+  }
+} else {
+  cat("No patients in Q2 2025\n")
+}
+```
+
+## Q2 2025: Donor Type (Not in Complete Remission Only)
+
+```{r q2-donor-not-cr}
+if(nrow(q2_data) > 0) {
+  q2_not_cr_data <- q2_data |> filter(disease_status_binary == "Not in Complete Remission")
+  
+  if(nrow(q2_not_cr_data) > 0) {
+    donor_types <- unique(q2_not_cr_data$donor_type_main)
+    
+    q2_donor_not_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q2_not_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q2_donor_not_cr_results <- bind_rows(q2_donor_not_cr_results, donor_result)
+      }
+    }
+    
+    kable(q2_donor_not_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q2 2025: Overall Survival by Donor Type (Not in Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No Not in CR patients in Q2 2025\n")
+  }
+} else {
+  cat("No patients in Q2 2025\n")
+}
+```
+
+## Q3 2025: Donor Type (Complete Remission Only)
+
+```{r q3-donor-cr}
+if(nrow(q3_data) > 0) {
+  q3_cr_data <- q3_data |> filter(disease_status_binary == "Complete Remission")
+  
+  if(nrow(q3_cr_data) > 0) {
+    donor_types <- unique(q3_cr_data$donor_type_main)
+    
+    q3_donor_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q3_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q3_donor_cr_results <- bind_rows(q3_donor_cr_results, donor_result)
+      }
+    }
+    
+    kable(q3_donor_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q3 2025: Overall Survival by Donor Type (Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No CR patients in Q3 2025\n")
+  }
+} else {
+  cat("No patients in Q3 2025\n")
+}
+```
+
+## Q3 2025: Donor Type (Not in Complete Remission Only)
+
+```{r q3-donor-not-cr}
+if(nrow(q3_data) > 0) {
+  q3_not_cr_data <- q3_data |> filter(disease_status_binary == "Not in Complete Remission")
+  
+  if(nrow(q3_not_cr_data) > 0) {
+    donor_types <- unique(q3_not_cr_data$donor_type_main)
+    
+    q3_donor_not_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q3_not_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q3_donor_not_cr_results <- bind_rows(q3_donor_not_cr_results, donor_result)
+      }
+    }
+    
+    kable(q3_donor_not_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q3 2025: Overall Survival by Donor Type (Not in Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No Not in CR patients in Q3 2025\n")
+  }
+} else {
+  cat("No patients in Q3 2025\n")
+}
+```
+
+## Q4 2025: Donor Type (Complete Remission Only)
+
+```{r q4-donor-cr}
+if(nrow(q4_data) > 0) {
+  q4_cr_data <- q4_data |> filter(disease_status_binary == "Complete Remission")
+  
+  if(nrow(q4_cr_data) > 0) {
+    donor_types <- unique(q4_cr_data$donor_type_main)
+    
+    q4_donor_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q4_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q4_donor_cr_results <- bind_rows(q4_donor_cr_results, donor_result)
+      }
+    }
+    
+    kable(q4_donor_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q4 2025: Overall Survival by Donor Type (Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No CR patients in Q4 2025\n")
+  }
+} else {
+  cat("No patients in Q4 2025\n")
+}
+```
+
+## Q4 2025: Donor Type (Not in Complete Remission Only)
+
+```{r q4-donor-not-cr}
+if(nrow(q4_data) > 0) {
+  q4_not_cr_data <- q4_data |> filter(disease_status_binary == "Not in Complete Remission")
+  
+  if(nrow(q4_not_cr_data) > 0) {
+    donor_types <- unique(q4_not_cr_data$donor_type_main)
+    
+    q4_donor_not_cr_results <- tibble()
+    
+    for(donor in donor_types) {
+      donor_data <- q4_not_cr_data |> filter(donor_type_main == donor)
+      
+      if(nrow(donor_data) > 0) {
+        os_30 <- calc_os_simple(donor_data, 30)
+        os_100 <- calc_os_simple(donor_data, 100)
+        os_365 <- calc_os_simple(donor_data, 365)
+        
+        donor_result <- tibble(
+          Donor_Type = donor,
+          N = os_30$n_total,
+          
+          Deaths_30d = os_30$n_deaths,
+          OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+          
+          Deaths_100d = os_100$n_deaths,
+          OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+          
+          Deaths_365d = os_365$n_deaths,
+          OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+        )
+        
+        q4_donor_not_cr_results <- bind_rows(q4_donor_not_cr_results, donor_result)
+      }
+    }
+    
+    kable(q4_donor_not_cr_results,
+          col.names = c("Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+          caption = "Q4 2025: Overall Survival by Donor Type (Not in Complete Remission Only)") |>
+      kable_styling(bootstrap_options = c("striped", "hover")) |>
+      add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+  } else {
+    cat("No Not in CR patients in Q4 2025\n")
+  }
+} else {
+  cat("No patients in Q4 2025\n")
+}
+```
+
+---
+
+# Summary Tables
+
+## All Quarters: Complete Remission Status
+
+```{r summary-cr-all}
+all_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      os_30 <- calc_os_simple(cr_data, 30)
+      os_100 <- calc_os_simple(cr_data, 100)
+      os_365 <- calc_os_simple(cr_data, 365)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      all_cr_results <- bind_rows(all_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival by Quarter and Complete Remission Status (All 2025)") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## All Quarters: Donor Type
+
+```{r summary-donor-all}
+all_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      os_30 <- calc_os_simple(donor_data, 30)
+      os_100 <- calc_os_simple(donor_data, 100)
+      os_365 <- calc_os_simple(donor_data, 365)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = os_30$n_total,
+        
+        Deaths_30d = os_30$n_deaths,
+        OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+        
+        Deaths_100d = os_100$n_deaths,
+        OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+        
+        Deaths_365d = os_365$n_deaths,
+        OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+      )
+      
+      all_donor_results <- bind_rows(all_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival by Quarter and Donor Type (All 2025)") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## All Quarters: Donor Type Stratified by Complete Remission Status
+
+```{r summary-donor-cr-stratified}
+all_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          os_30 <- calc_os_simple(donor_data, 30)
+          os_100 <- calc_os_simple(donor_data, 100)
+          os_365 <- calc_os_simple(donor_data, 365)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = os_30$n_total,
+            
+            Deaths_30d = os_30$n_deaths,
+            OS_30d = paste0(os_30$n_alive, "/", os_30$n_total, " (", os_30$os_pct, "%)"),
+            
+            Deaths_100d = os_100$n_deaths,
+            OS_100d = paste0(os_100$n_alive, "/", os_100$n_total, " (", os_100$os_pct, "%)"),
+            
+            Deaths_365d = os_365$n_deaths,
+            OS_365d = paste0(os_365$n_alive, "/", os_365$n_total, " (", os_365$os_pct, "%)")
+          )
+          
+          all_donor_cr_strat <- bind_rows(all_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)", "Deaths", "OS (n/N %)"),
+      caption = "Overall Survival by Quarter, Donor Type, and Complete Remission Status (All 2025)") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 4, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*Analysis includes only patients transplanted in calendar year 2025, organized by quarter (trimester)*

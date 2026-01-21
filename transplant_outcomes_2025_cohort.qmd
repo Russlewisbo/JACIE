@@ -230,7 +230,7 @@ kable(donor_summary,
 ## Overall Survival at Key Timepoints (All Patients)
 
 ```{r os-timepoints-all}
-# Function to calculate OS at specific timepoint using Kaplan-Meier
+# Function to calculate OS at specific timepoint using simple percentages
 calc_os_timepoint <- function(data, timepoint) {
   # Handle empty data
   if (nrow(data) == 0) {
@@ -238,27 +238,26 @@ calc_os_timepoint <- function(data, timepoint) {
       n_at_risk = 0,
       n_deaths = NA_integer_,
       n_alive = NA_integer_,
-      os_pct = NA_real_,
-      ci_lower = NA_real_,
-      ci_upper = NA_real_
+      os_pct = NA_real_
     ))
   }
   
-  surv_obj <- Surv(time = data$days_to_event, event = data$death)
-  km_fit <- survfit(surv_obj ~ 1, data = data)
-  km_summary <- summary(km_fit, times = timepoint, extend = TRUE)
+  # Count deaths by timepoint
+  n_deaths <- sum(data$death[data$days_to_event <= timepoint])
+  n_alive <- nrow(data) - n_deaths
   
-  os_pct <- round(km_summary$surv * 100, 1)
-  ci_lower <- round(km_summary$lower * 100, 1)
-  ci_upper <- round(km_summary$upper * 100, 1)
+  # Simple percentage calculation
+  os_pct <- round(100 * n_alive / nrow(data), 1)
+  
+  # At risk = those who haven't died or been censored before timepoint
+  n_at_risk <- sum(data$days_to_event >= timepoint | 
+                   (data$death == 1 & data$days_to_event <= timepoint))
   
   return(tibble(
-    n_at_risk = km_summary$n.risk,
-    n_deaths = sum(data$death[data$days_to_event <= timepoint]),
-    n_alive = nrow(data) - sum(data$death[data$days_to_event <= timepoint]),
-    os_pct = os_pct,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper
+    n_at_risk = n_at_risk,
+    n_deaths = n_deaths,
+    n_alive = n_alive,
+    os_pct = os_pct
   ))
 }
 
