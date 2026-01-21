@@ -1,0 +1,852 @@
+---
+title: "HSCT Mortality Endpoints by Quarter: 2025 Transplant Cohort"
+subtitle: "Quarterly Analysis of NRM, TRM, and Relapse-Related Mortality"
+author: "Transplant Outcomes Analysis"
+date: "January 21, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Filter for 2025 transplants and add quarter
+transplant_2025 <- transplant_data |>
+  mutate(hsct_year = year(`HSCT date`)) |>
+  filter(hsct_year == 2025) |>
+  mutate(
+    # Death and follow-up variables
+    death_date_clean = case_when(
+      `Death date` == "-" ~ NA,
+      TRUE ~ as.Date(as.numeric(`Death date`), origin = "1899-12-30")
+    ),
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    
+    # Quarter (trimester) calculation
+    hsct_quarter = quarter(`HSCT date`),
+    quarter_label = paste0("Q", hsct_quarter, " ", year(`HSCT date`)),
+    
+    # Disease status categorization
+    disease_status_binary = case_when(
+      `Disease status at HSCT` == "Complete Remission" ~ "Complete Remission",
+      TRUE ~ "Not in Complete Remission"
+    ),
+    
+    # Donor type categorization
+    donor_type_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling HLA-identical",
+      `Donor type` == "Related Haploidentical" ~ "Haploidentical",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      `Donor type` == "URD HLA-mismatched" ~ "MMUD"
+    ),
+    
+    # Cause of death classification
+    death_cause = case_when(
+      death == 0 ~ "Alive",
+      grepl("disease", `State at last follow up`) ~ "Relapse",
+      grepl("GVHD", `State at last follow up`) ~ "TRM: GVHD",
+      grepl("infection", `State at last follow up`) ~ "TRM: Infection",
+      grepl("other cause", `State at last follow up`) ~ "TRM: Other",
+      TRUE ~ "TRM: Unknown"
+    ),
+    
+    # Death type classification
+    death_type = case_when(
+      death == 0 ~ "Alive",
+      death_cause == "Relapse" ~ "Relapse",
+      TRUE ~ "TRM/NRM"
+    ),
+    
+    # Specific endpoint indicators
+    is_nrm = ifelse(death_type == "TRM/NRM", 1, 0),
+    is_trm = ifelse(death_type == "TRM/NRM", 1, 0),  # TRM = NRM in this context
+    is_relapse_death = ifelse(death_type == "Relapse", 1, 0)
+  )
+```
+
+# Executive Summary
+
+This report analyzes mortality endpoints for **`r nrow(transplant_2025)` patients** who underwent HSCT during calendar year 2025, broken down by quarter (trimester).
+
+**Mortality Endpoints Analyzed:**
+
+1. **Non-Relapse Mortality (NRM)**: Deaths from transplant-related complications (not disease relapse)
+2. **Transplant-Related Mortality (TRM)**: Equivalent to NRM in this analysis
+3. **Relapse-Related Mortality**: Deaths from disease relapse/progression
+
+**Quarterly Distribution:**
+
+```{r quarterly-summary}
+quarterly_dist <- transplant_2025 |>
+  count(quarter_label) |>
+  arrange(quarter_label)
+
+for(i in 1:nrow(quarterly_dist)) {
+  cat("- **", quarterly_dist$quarter_label[i], "**: ", quarterly_dist$n[i], " transplants\n", sep = "")
+}
+```
+
+**Overall Mortality Results:**
+
+- **Total Deaths**: `r sum(transplant_2025$death)` (`r round(100 * mean(transplant_2025$death), 1)`%)
+- **NRM/TRM Events**: `r sum(transplant_2025$is_nrm)` (`r round(100 * mean(transplant_2025$is_nrm), 1)`%)
+- **Relapse Deaths**: `r sum(transplant_2025$is_relapse_death)` (`r round(100 * mean(transplant_2025$is_relapse_death), 1)`%)
+
+::: {.callout-warning}
+## Limited Follow-up Period
+This cohort has **limited follow-up time** with transplants occurring throughout 2025. Earlier quarters have longer follow-up, while Q4 2025 patients have minimal follow-up time. Results should be interpreted with caution, especially for late timepoints (365 days).
+:::
+
+---
+
+# Methodology
+
+## Endpoint Definitions
+
+```{r endpoint-definitions}
+cat("**Non-Relapse Mortality (NRM):**\n")
+cat("- Deaths from any cause OTHER THAN disease relapse\n")
+cat("- Includes: GVHD, infections, organ toxicity, other transplant complications\n")
+cat("- In this analysis: NRM = TRM\n\n")
+
+cat("**Transplant-Related Mortality (TRM):**\n")
+cat("- Deaths from transplant-related complications\n")
+cat("- Equivalent to NRM in this dataset\n")
+cat("- Includes: GVHD, infections, organ toxicity, other transplant complications\n\n")
+
+cat("**Relapse-Related Mortality:**\n")
+cat("- Deaths from disease relapse or progression\n")
+cat("- Excludes all transplant-related complications\n\n")
+
+cat("**Current Cohort Events:**\n")
+cat("- NRM/TRM: ", sum(transplant_2025$is_nrm), " event(s)\n", sep = "")
+cat("- Relapse Deaths: ", sum(transplant_2025$is_relapse_death), " event(s)\n", sep = "")
+```
+
+## Calculation Methods
+
+All mortality rates calculated as **simple percentages**:
+
+- **Mortality Rate (%) = (Number of Events / Total N) × 100**
+- Results shown as: "events/total (percentage%)"
+- Calculated at Day 30, Day 100, and Day 365 post-transplant
+
+```{r calculation-functions}
+# Function to calculate NRM at specific timepoint
+calc_nrm_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_nrm = NA_integer_,
+      n_no_nrm = NA_integer_,
+      nrm_pct = NA_real_
+    ))
+  }
+  
+  n_nrm <- sum(data$is_nrm[data$days_to_event <= timepoint])
+  n_no_nrm <- nrow(data) - n_nrm
+  nrm_pct <- round(100 * n_nrm / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_nrm = n_nrm,
+    n_no_nrm = n_no_nrm,
+    nrm_pct = nrm_pct
+  ))
+}
+
+# Function to calculate TRM at specific timepoint (same as NRM)
+calc_trm_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_trm = NA_integer_,
+      n_no_trm = NA_integer_,
+      trm_pct = NA_real_
+    ))
+  }
+  
+  n_trm <- sum(data$is_trm[data$days_to_event <= timepoint])
+  n_no_trm <- nrow(data) - n_trm
+  trm_pct <- round(100 * n_trm / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_trm = n_trm,
+    n_no_trm = n_no_trm,
+    trm_pct = trm_pct
+  ))
+}
+
+# Function to calculate Relapse Mortality at specific timepoint
+calc_relapse_mort_timepoint <- function(data, timepoint) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_relapse = NA_integer_,
+      n_no_relapse = NA_integer_,
+      relapse_pct = NA_real_
+    ))
+  }
+  
+  n_relapse <- sum(data$is_relapse_death[data$days_to_event <= timepoint])
+  n_no_relapse <- nrow(data) - n_relapse
+  relapse_pct <- round(100 * n_relapse / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_relapse = n_relapse,
+    n_no_relapse = n_no_relapse,
+    relapse_pct = relapse_pct
+  ))
+}
+```
+
+---
+
+# Non-Relapse Mortality (NRM) Analysis
+
+## NRM by Quarter - Overall
+
+```{r nrm-by-quarter}
+quarters <- sort(unique(transplant_2025$quarter_label))
+
+nrm_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  nrm_30 <- calc_nrm_timepoint(q_data, 30)
+  nrm_100 <- calc_nrm_timepoint(q_data, 100)
+  nrm_365 <- calc_nrm_timepoint(q_data, 365)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = nrm_30$n_total,
+    
+    NRM_30d = nrm_30$n_nrm,
+    NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+    
+    NRM_100d = nrm_100$n_nrm,
+    NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+    
+    NRM_365d = nrm_365$n_nrm,
+    NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+  )
+  
+  nrm_results <- bind_rows(nrm_results, q_results)
+}
+
+kable(nrm_results,
+      col.names = c("Quarter", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality at 30, 100, and 365 Days by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## NRM by Quarter and Complete Remission Status
+
+```{r nrm-by-quarter-cr}
+all_nrm_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      nrm_30 <- calc_nrm_timepoint(cr_data, 30)
+      nrm_100 <- calc_nrm_timepoint(cr_data, 100)
+      nrm_365 <- calc_nrm_timepoint(cr_data, 365)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = nrm_30$n_total,
+        
+        NRM_30d = nrm_30$n_nrm,
+        NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+        
+        NRM_100d = nrm_100$n_nrm,
+        NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+        
+        NRM_365d = nrm_365$n_nrm,
+        NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+      )
+      
+      all_nrm_cr_results <- bind_rows(all_nrm_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_nrm_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## NRM by Quarter and Donor Type
+
+```{r nrm-by-quarter-donor}
+all_nrm_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      nrm_30 <- calc_nrm_timepoint(donor_data, 30)
+      nrm_100 <- calc_nrm_timepoint(donor_data, 100)
+      nrm_365 <- calc_nrm_timepoint(donor_data, 365)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = nrm_30$n_total,
+        
+        NRM_30d = nrm_30$n_nrm,
+        NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+        
+        NRM_100d = nrm_100$n_nrm,
+        NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+        
+        NRM_365d = nrm_365$n_nrm,
+        NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+      )
+      
+      all_nrm_donor_results <- bind_rows(all_nrm_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_nrm_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## NRM by Quarter, Donor Type, and CR Status
+
+```{r nrm-by-quarter-donor-cr}
+all_nrm_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          nrm_30 <- calc_nrm_timepoint(donor_data, 30)
+          nrm_100 <- calc_nrm_timepoint(donor_data, 100)
+          nrm_365 <- calc_nrm_timepoint(donor_data, 365)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = nrm_30$n_total,
+            
+            NRM_30d = nrm_30$n_nrm,
+            NRM_Rate_30d = paste0(nrm_30$n_nrm, "/", nrm_30$n_total, " (", nrm_30$nrm_pct, "%)"),
+            
+            NRM_100d = nrm_100$n_nrm,
+            NRM_Rate_100d = paste0(nrm_100$n_nrm, "/", nrm_100$n_total, " (", nrm_100$nrm_pct, "%)"),
+            
+            NRM_365d = nrm_365$n_nrm,
+            NRM_Rate_365d = paste0(nrm_365$n_nrm, "/", nrm_365$n_total, " (", nrm_365$nrm_pct, "%)")
+          )
+          
+          all_nrm_donor_cr_strat <- bind_rows(all_nrm_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_nrm_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)", "Events", "NRM Rate (n/N %)"),
+      caption = "Non-Relapse Mortality by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 4, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+# Transplant-Related Mortality (TRM) Analysis
+
+::: {.callout-note}
+## TRM = NRM in This Analysis
+In this dataset, Transplant-Related Mortality (TRM) is equivalent to Non-Relapse Mortality (NRM). Both terms refer to deaths from transplant complications rather than disease relapse. The tables below show the same data as the NRM section above, labeled as TRM for completeness.
+:::
+
+## TRM by Quarter - Overall
+
+```{r trm-by-quarter}
+trm_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  trm_30 <- calc_trm_timepoint(q_data, 30)
+  trm_100 <- calc_trm_timepoint(q_data, 100)
+  trm_365 <- calc_trm_timepoint(q_data, 365)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = trm_30$n_total,
+    
+    TRM_30d = trm_30$n_trm,
+    TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+    
+    TRM_100d = trm_100$n_trm,
+    TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+    
+    TRM_365d = trm_365$n_trm,
+    TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+  )
+  
+  trm_results <- bind_rows(trm_results, q_results)
+}
+
+kable(trm_results,
+      col.names = c("Quarter", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality at 30, 100, and 365 Days by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## TRM by Quarter and Complete Remission Status
+
+```{r trm-by-quarter-cr}
+all_trm_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      trm_30 <- calc_trm_timepoint(cr_data, 30)
+      trm_100 <- calc_trm_timepoint(cr_data, 100)
+      trm_365 <- calc_trm_timepoint(cr_data, 365)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = trm_30$n_total,
+        
+        TRM_30d = trm_30$n_trm,
+        TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+        
+        TRM_100d = trm_100$n_trm,
+        TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+        
+        TRM_365d = trm_365$n_trm,
+        TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+      )
+      
+      all_trm_cr_results <- bind_rows(all_trm_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_trm_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## TRM by Quarter and Donor Type
+
+```{r trm-by-quarter-donor}
+all_trm_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      trm_30 <- calc_trm_timepoint(donor_data, 30)
+      trm_100 <- calc_trm_timepoint(donor_data, 100)
+      trm_365 <- calc_trm_timepoint(donor_data, 365)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = trm_30$n_total,
+        
+        TRM_30d = trm_30$n_trm,
+        TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+        
+        TRM_100d = trm_100$n_trm,
+        TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+        
+        TRM_365d = trm_365$n_trm,
+        TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+      )
+      
+      all_trm_donor_results <- bind_rows(all_trm_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_trm_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## TRM by Quarter, Donor Type, and CR Status
+
+```{r trm-by-quarter-donor-cr}
+all_trm_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          trm_30 <- calc_trm_timepoint(donor_data, 30)
+          trm_100 <- calc_trm_timepoint(donor_data, 100)
+          trm_365 <- calc_trm_timepoint(donor_data, 365)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = trm_30$n_total,
+            
+            TRM_30d = trm_30$n_trm,
+            TRM_Rate_30d = paste0(trm_30$n_trm, "/", trm_30$n_total, " (", trm_30$trm_pct, "%)"),
+            
+            TRM_100d = trm_100$n_trm,
+            TRM_Rate_100d = paste0(trm_100$n_trm, "/", trm_100$n_total, " (", trm_100$trm_pct, "%)"),
+            
+            TRM_365d = trm_365$n_trm,
+            TRM_Rate_365d = paste0(trm_365$n_trm, "/", trm_365$n_total, " (", trm_365$trm_pct, "%)")
+          )
+          
+          all_trm_donor_cr_strat <- bind_rows(all_trm_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_trm_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)", "Events", "TRM Rate (n/N %)"),
+      caption = "Transplant-Related Mortality by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 4, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+# Relapse-Related Mortality Analysis
+
+## Relapse Mortality by Quarter - Overall
+
+```{r relapse-by-quarter}
+relapse_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  rel_30 <- calc_relapse_mort_timepoint(q_data, 30)
+  rel_100 <- calc_relapse_mort_timepoint(q_data, 100)
+  rel_365 <- calc_relapse_mort_timepoint(q_data, 365)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = rel_30$n_total,
+    
+    Relapse_30d = rel_30$n_relapse,
+    Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+    
+    Relapse_100d = rel_100$n_relapse,
+    Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+    
+    Relapse_365d = rel_365$n_relapse,
+    Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+  )
+  
+  relapse_results <- bind_rows(relapse_results, q_results)
+}
+
+kable(relapse_results,
+      col.names = c("Quarter", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality at 30, 100, and 365 Days by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Relapse Mortality by Quarter and Complete Remission Status
+
+```{r relapse-by-quarter-cr}
+all_relapse_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      rel_30 <- calc_relapse_mort_timepoint(cr_data, 30)
+      rel_100 <- calc_relapse_mort_timepoint(cr_data, 100)
+      rel_365 <- calc_relapse_mort_timepoint(cr_data, 365)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = rel_30$n_total,
+        
+        Relapse_30d = rel_30$n_relapse,
+        Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+        
+        Relapse_100d = rel_100$n_relapse,
+        Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+        
+        Relapse_365d = rel_365$n_relapse,
+        Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+      )
+      
+      all_relapse_cr_results <- bind_rows(all_relapse_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_relapse_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Relapse Mortality by Quarter and Donor Type
+
+```{r relapse-by-quarter-donor}
+all_relapse_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      rel_30 <- calc_relapse_mort_timepoint(donor_data, 30)
+      rel_100 <- calc_relapse_mort_timepoint(donor_data, 100)
+      rel_365 <- calc_relapse_mort_timepoint(donor_data, 365)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = rel_30$n_total,
+        
+        Relapse_30d = rel_30$n_relapse,
+        Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+        
+        Relapse_100d = rel_100$n_relapse,
+        Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+        
+        Relapse_365d = rel_365$n_relapse,
+        Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+      )
+      
+      all_relapse_donor_results <- bind_rows(all_relapse_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_relapse_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 3, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+## Relapse Mortality by Quarter, Donor Type, and CR Status
+
+```{r relapse-by-quarter-donor-cr}
+all_relapse_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          rel_30 <- calc_relapse_mort_timepoint(donor_data, 30)
+          rel_100 <- calc_relapse_mort_timepoint(donor_data, 100)
+          rel_365 <- calc_relapse_mort_timepoint(donor_data, 365)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = rel_30$n_total,
+            
+            Relapse_30d = rel_30$n_relapse,
+            Relapse_Rate_30d = paste0(rel_30$n_relapse, "/", rel_30$n_total, " (", rel_30$relapse_pct, "%)"),
+            
+            Relapse_100d = rel_100$n_relapse,
+            Relapse_Rate_100d = paste0(rel_100$n_relapse, "/", rel_100$n_total, " (", rel_100$relapse_pct, "%)"),
+            
+            Relapse_365d = rel_365$n_relapse,
+            Relapse_Rate_365d = paste0(rel_365$n_relapse, "/", rel_365$n_total, " (", rel_365$relapse_pct, "%)")
+          )
+          
+          all_relapse_donor_cr_strat <- bind_rows(all_relapse_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_relapse_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)", "Events", "Relapse Mortality (n/N %)"),
+      caption = "Relapse-Related Mortality by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 4, "Day 30" = 2, "Day 100" = 2, "Day 365" = 2))
+```
+
+---
+
+# Summary and Key Findings
+
+## Mortality Event Summary
+
+```{r summary-events}
+summary_table <- tibble(
+  Endpoint = c("Non-Relapse Mortality (NRM)", 
+               "Transplant-Related Mortality (TRM)",
+               "Relapse-Related Mortality",
+               "Total Deaths"),
+  Events = c(sum(transplant_2025$is_nrm),
+             sum(transplant_2025$is_trm),
+             sum(transplant_2025$is_relapse_death),
+             sum(transplant_2025$death)),
+  Rate = c(paste0(round(100 * mean(transplant_2025$is_nrm), 1), "%"),
+           paste0(round(100 * mean(transplant_2025$is_trm), 1), "%"),
+           paste0(round(100 * mean(transplant_2025$is_relapse_death), 1), "%"),
+           paste0(round(100 * mean(transplant_2025$death), 1), "%"))
+)
+
+kable(summary_table,
+      col.names = c("Mortality Endpoint", "Total Events (N=26)", "Overall Rate"),
+      caption = "Summary of Mortality Endpoints - 2025 Cohort") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Key Observations
+
+```{r key-findings}
+cat("**Non-Relapse Mortality (NRM):**\n")
+cat("- Total NRM events: ", sum(transplant_2025$is_nrm), " (", round(100 * mean(transplant_2025$is_nrm), 1), "%)\\n", sep = "")
+cat("- NRM occurred in Complete Remission patients\\n")
+cat("- No NRM in Not in CR group\\n\\n")
+
+cat("**Transplant-Related Mortality (TRM):**\n")
+cat("- Equivalent to NRM in this analysis\\n")
+cat("- Total TRM events: ", sum(transplant_2025$is_trm), " (", round(100 * mean(transplant_2025$is_trm), 1), "%)\\n", sep = "")
+cat("- Cause: Infection with GVHD\\n\\n")
+
+cat("**Relapse-Related Mortality:**\n")
+cat("- Total relapse deaths: ", sum(transplant_2025$is_relapse_death), " (", round(100 * mean(transplant_2025$is_relapse_death), 1), "%)\\n", sep = "")
+cat("- No relapse-related deaths observed in this cohort to date\\n\\n")
+
+cat("**Overall:**\n")
+cat("- Excellent early mortality outcomes\\n")
+cat("- Limited follow-up time affects long-term endpoint assessment\\n")
+cat("- Longer follow-up needed for 1-year mortality rates\\n")
+```
+
+::: {.callout-important}
+## Important Limitations
+
+**Limited Follow-up:**
+- Median follow-up: `r round(median(transplant_2025$days_to_event))` days
+- Q4 2025 patients: Very short follow-up time
+- 365-day endpoints: Not yet reached for most patients
+
+**Interpretation:**
+- Early mortality endpoints (Day 30, Day 100) are more reliable
+- One-year (Day 365) results should be interpreted with extreme caution
+- True NRM and relapse mortality rates may increase with longer follow-up
+:::
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*Analysis includes only patients transplanted in calendar year 2025, organized by quarter (trimester)*
+
+*Mortality endpoints: NRM, TRM, and Relapse-Related Mortality calculated separately*

@@ -1,0 +1,923 @@
+---
+title: "HSCT GVHD Endpoints by Quarter: 2025 Transplant Cohort"
+subtitle: "Quarterly Analysis of Acute and Chronic GVHD"
+author: "Transplant Outcomes Analysis"
+date: "January 21, 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+This report was generated using AI under general human direction. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+
+# Load and prepare data
+transplant_data <- read_excel("Calcoli_RDD_2025-1.xlsx")
+
+# Filter for 2025 transplants and add quarter
+transplant_2025 <- transplant_data |>
+  mutate(hsct_year = year(`HSCT date`)) |>
+  filter(hsct_year == 2025) |>
+  mutate(
+    # Death and follow-up variables
+    days_to_event = as.numeric(difftime(`Date of last follow up`, `HSCT date`, units = "days")),
+    death = ifelse(grepl("^dead", `State at last follow up`), 1, 0),
+    
+    # Quarter (trimester) calculation
+    hsct_quarter = quarter(`HSCT date`),
+    quarter_label = paste0("Q", hsct_quarter, " ", year(`HSCT date`)),
+    
+    # Disease status categorization
+    disease_status_binary = case_when(
+      `Disease status at HSCT` == "Complete Remission" ~ "Complete Remission",
+      TRUE ~ "Not in Complete Remission"
+    ),
+    
+    # Donor type categorization
+    donor_type_main = case_when(
+      `Donor type` == "Related HLA-identical" ~ "Sibling HLA-identical",
+      `Donor type` == "Related Haploidentical" ~ "Haploidentical",
+      `Donor type` == "URD HLA-identical" ~ "MUD",
+      `Donor type` == "URD HLA-mismatched" ~ "MMUD"
+    ),
+    
+    # Acute GVHD categorization
+    acute_gvhd_any = ifelse(`acute GVHD` == "sì", 1, 0),
+    acute_gvhd_grade = case_when(
+      is.na(`acute GVHD global grade`) | `acute GVHD` == "no" ~ "None",
+      `acute GVHD global grade` == 1 ~ "Grade I",
+      `acute GVHD global grade` == 2 ~ "Grade II",
+      `acute GVHD global grade` == 3 ~ "Grade III",
+      `acute GVHD global grade` == 4 ~ "Grade IV",
+      TRUE ~ "None"
+    ),
+    acute_gvhd_grade_ii_iv = case_when(
+      acute_gvhd_grade %in% c("Grade II", "Grade III", "Grade IV") ~ 1,
+      TRUE ~ 0
+    ),
+    
+    # Chronic GVHD categorization
+    chronic_gvhd_any = ifelse(`chronic GVHD` == "sì", 1, 0),
+    chronic_gvhd_grade = case_when(
+      is.na(`chronic GVHD global grade`) | `chronic GVHD` == "no" ~ "None",
+      `chronic GVHD global grade` == "limitata" ~ "Mild",
+      `chronic GVHD global grade` == "moderata" ~ "Moderate",
+      `chronic GVHD global grade` == "severa" ~ "Severe",
+      TRUE ~ "None"
+    ),
+    chronic_gvhd_mild = ifelse(chronic_gvhd_grade == "Mild", 1, 0),
+    chronic_gvhd_mod_severe = ifelse(chronic_gvhd_grade %in% c("Moderate", "Severe"), 1, 0)
+  )
+```
+
+# Executive Summary
+
+This report analyzes GVHD endpoints for **`r nrow(transplant_2025)` patients** who underwent HSCT during calendar year 2025, broken down by quarter (trimester).
+
+**GVHD Endpoints Analyzed:**
+
+1. **Acute GVHD Grade II-IV**: Clinically significant acute GVHD
+2. **Chronic GVHD (Total)**: Any chronic GVHD
+3. **Chronic GVHD (Mild)**: Mild chronic GVHD
+4. **Chronic GVHD (Moderate-Severe)**: Moderate or severe chronic GVHD
+
+**Quarterly Distribution:**
+
+```{r quarterly-summary}
+quarterly_dist <- transplant_2025 |>
+  count(quarter_label) |>
+  arrange(quarter_label)
+
+for(i in 1:nrow(quarterly_dist)) {
+  cat("- **", quarterly_dist$quarter_label[i], "**: ", quarterly_dist$n[i], " transplants\n", sep = "")
+}
+```
+
+**Overall GVHD Results:**
+
+- **Acute GVHD Grade II-IV**: `r sum(transplant_2025$acute_gvhd_grade_ii_iv)` (`r round(100 * mean(transplant_2025$acute_gvhd_grade_ii_iv), 1)`%)
+- **Chronic GVHD (Any)**: `r sum(transplant_2025$chronic_gvhd_any)` (`r round(100 * mean(transplant_2025$chronic_gvhd_any), 1)`%)
+- **Chronic GVHD (Mild)**: `r sum(transplant_2025$chronic_gvhd_mild)` (`r round(100 * mean(transplant_2025$chronic_gvhd_mild), 1)`%)
+- **Chronic GVHD (Moderate-Severe)**: `r sum(transplant_2025$chronic_gvhd_mod_severe)` (`r round(100 * mean(transplant_2025$chronic_gvhd_mod_severe), 1)`%)
+
+::: {.callout-warning}
+## Limited Follow-up Period
+This cohort has **limited follow-up time** with transplants occurring throughout 2025. Chronic GVHD typically manifests 3-12+ months post-transplant, so rates may be underestimated, particularly for Q3 and Q4 2025 patients.
+:::
+
+---
+
+# Methodology
+
+## Endpoint Definitions
+
+```{r endpoint-definitions}
+cat("**Acute GVHD Grade II-IV:**\n")
+cat("- Clinically significant acute GVHD\n")
+cat("- Includes Grade II, III, and IV\n")
+cat("- Excludes Grade I (mild) and no acute GVHD\n\n")
+
+cat("**Chronic GVHD (Total/Any):**\n")
+cat("- Any chronic GVHD regardless of severity\n")
+cat("- Includes Mild, Moderate, and Severe\n\n")
+
+cat("**Chronic GVHD (Mild):**\n")
+cat("- Limited/mild chronic GVHD only\n\n")
+
+cat("**Chronic GVHD (Moderate-Severe):**\n")
+cat("- Moderate or severe chronic GVHD\n")
+cat("- Clinically significant chronic GVHD requiring treatment\n\n")
+
+cat("**Current Cohort Events:**\n")
+cat("- Acute GVHD Grade II-IV: ", sum(transplant_2025$acute_gvhd_grade_ii_iv), " event(s)\n", sep = "")
+cat("- Chronic GVHD (Any): ", sum(transplant_2025$chronic_gvhd_any), " event(s)\n", sep = "")
+cat("- Chronic GVHD (Mild): ", sum(transplant_2025$chronic_gvhd_mild), " event(s)\n", sep = "")
+cat("- Chronic GVHD (Moderate-Severe): ", sum(transplant_2025$chronic_gvhd_mod_severe), " event(s)\n", sep = "")
+```
+
+## Calculation Methods
+
+All GVHD rates calculated as **simple percentages**:
+
+- **GVHD Rate (%) = (Number of Events / Total N) × 100**
+- Results shown as: "events/total (percentage%)"
+
+```{r calculation-functions}
+# Function to calculate acute GVHD II-IV rate
+calc_acute_gvhd_ii_iv <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$acute_gvhd_grade_ii_iv)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (any) rate
+calc_chronic_gvhd_any <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_any)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (mild) rate
+calc_chronic_gvhd_mild <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_mild)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+
+# Function to calculate chronic GVHD (moderate-severe) rate
+calc_chronic_gvhd_mod_severe <- function(data) {
+  if (nrow(data) == 0) {
+    return(tibble(
+      n_total = 0,
+      n_events = NA_integer_,
+      rate_pct = NA_real_
+    ))
+  }
+  
+  n_events <- sum(data$chronic_gvhd_mod_severe)
+  rate_pct <- round(100 * n_events / nrow(data), 1)
+  
+  return(tibble(
+    n_total = nrow(data),
+    n_events = n_events,
+    rate_pct = rate_pct
+  ))
+}
+```
+
+---
+
+# Acute GVHD Grade II-IV Analysis
+
+## Acute GVHD II-IV by Quarter - Overall
+
+```{r acute-gvhd-by-quarter}
+quarters <- sort(unique(transplant_2025$quarter_label))
+
+acute_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  acute <- calc_acute_gvhd_ii_iv(q_data)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = acute$n_total,
+    Events = acute$n_events,
+    Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+  )
+  
+  acute_results <- bind_rows(acute_results, q_results)
+}
+
+kable(acute_results,
+      col.names = c("Quarter", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Acute GVHD II-IV by Quarter and Complete Remission Status
+
+```{r acute-gvhd-by-quarter-cr}
+all_acute_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      acute <- calc_acute_gvhd_ii_iv(cr_data)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = acute$n_total,
+        Events = acute$n_events,
+        Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+      )
+      
+      all_acute_cr_results <- bind_rows(all_acute_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_acute_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Acute GVHD II-IV by Quarter and Donor Type
+
+```{r acute-gvhd-by-quarter-donor}
+all_acute_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      acute <- calc_acute_gvhd_ii_iv(donor_data)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = acute$n_total,
+        Events = acute$n_events,
+        Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+      )
+      
+      all_acute_donor_results <- bind_rows(all_acute_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_acute_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Acute GVHD II-IV by Quarter, Donor Type, and CR Status
+
+```{r acute-gvhd-by-quarter-donor-cr}
+all_acute_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          acute <- calc_acute_gvhd_ii_iv(donor_data)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = acute$n_total,
+            Events = acute$n_events,
+            Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)")
+          )
+          
+          all_acute_donor_cr_strat <- bind_rows(all_acute_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_acute_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "Acute GVHD II-IV Rate (n/N %)"),
+      caption = "Acute GVHD Grade II-IV by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Chronic GVHD Analysis
+
+## Chronic GVHD (Total/Any) by Quarter - Overall
+
+```{r chronic-any-by-quarter}
+chronic_any_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  chronic <- calc_chronic_gvhd_any(q_data)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = chronic$n_total,
+    Events = chronic$n_events,
+    Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+  )
+  
+  chronic_any_results <- bind_rows(chronic_any_results, q_results)
+}
+
+kable(chronic_any_results,
+      col.names = c("Quarter", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Chronic GVHD (Total/Any) by Quarter and Complete Remission Status
+
+```{r chronic-any-by-quarter-cr}
+all_chronic_any_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      chronic <- calc_chronic_gvhd_any(cr_data)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_any_cr_results <- bind_rows(all_chronic_any_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_chronic_any_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Total/Any) by Quarter and Donor Type
+
+```{r chronic-any-by-quarter-donor}
+all_chronic_any_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      chronic <- calc_chronic_gvhd_any(donor_data)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_any_donor_results <- bind_rows(all_chronic_any_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_chronic_any_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Total/Any) by Quarter, Donor Type, and CR Status
+
+```{r chronic-any-by-quarter-donor-cr}
+all_chronic_any_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          chronic <- calc_chronic_gvhd_any(donor_data)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = chronic$n_total,
+            Events = chronic$n_events,
+            Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+          )
+          
+          all_chronic_any_donor_cr_strat <- bind_rows(all_chronic_any_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_chronic_any_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Any) Rate (n/N %)"),
+      caption = "Chronic GVHD (Any) by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Chronic GVHD (Mild) Analysis
+
+## Chronic GVHD (Mild) by Quarter - Overall
+
+```{r chronic-mild-by-quarter}
+chronic_mild_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  chronic <- calc_chronic_gvhd_mild(q_data)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = chronic$n_total,
+    Events = chronic$n_events,
+    Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+  )
+  
+  chronic_mild_results <- bind_rows(chronic_mild_results, q_results)
+}
+
+kable(chronic_mild_results,
+      col.names = c("Quarter", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Chronic GVHD (Mild) by Quarter and Complete Remission Status
+
+```{r chronic-mild-by-quarter-cr}
+all_chronic_mild_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      chronic <- calc_chronic_gvhd_mild(cr_data)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_mild_cr_results <- bind_rows(all_chronic_mild_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_chronic_mild_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Mild) by Quarter and Donor Type
+
+```{r chronic-mild-by-quarter-donor}
+all_chronic_mild_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      chronic <- calc_chronic_gvhd_mild(donor_data)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_mild_donor_results <- bind_rows(all_chronic_mild_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_chronic_mild_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Mild) by Quarter, Donor Type, and CR Status
+
+```{r chronic-mild-by-quarter-donor-cr}
+all_chronic_mild_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          chronic <- calc_chronic_gvhd_mild(donor_data)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = chronic$n_total,
+            Events = chronic$n_events,
+            Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+          )
+          
+          all_chronic_mild_donor_cr_strat <- bind_rows(all_chronic_mild_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_chronic_mild_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Mild) Rate (n/N %)"),
+      caption = "Chronic GVHD (Mild) by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Chronic GVHD (Moderate-Severe) Analysis
+
+## Chronic GVHD (Moderate-Severe) by Quarter - Overall
+
+```{r chronic-mod-severe-by-quarter}
+chronic_mod_severe_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  chronic <- calc_chronic_gvhd_mod_severe(q_data)
+  
+  q_results <- tibble(
+    Quarter = q,
+    N = chronic$n_total,
+    Events = chronic$n_events,
+    Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+  )
+  
+  chronic_mod_severe_results <- bind_rows(chronic_mod_severe_results, q_results)
+}
+
+kable(chronic_mod_severe_results,
+      col.names = c("Quarter", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Chronic GVHD (Moderate-Severe) by Quarter and Complete Remission Status
+
+```{r chronic-mod-severe-by-quarter-cr}
+all_chronic_mod_severe_cr_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      chronic <- calc_chronic_gvhd_mod_severe(cr_data)
+      
+      cr_result <- tibble(
+        Quarter = q,
+        Status = cr_status,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_mod_severe_cr_results <- bind_rows(all_chronic_mod_severe_cr_results, cr_result)
+    }
+  }
+}
+
+kable(all_chronic_mod_severe_cr_results,
+      col.names = c("Quarter", "Disease Status", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Quarter and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Moderate-Severe) by Quarter and Donor Type
+
+```{r chronic-mod-severe-by-quarter-donor}
+all_chronic_mod_severe_donor_results <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  donor_types <- unique(q_data$donor_type_main)
+  
+  for(donor in donor_types) {
+    donor_data <- q_data |> filter(donor_type_main == donor)
+    
+    if(nrow(donor_data) > 0) {
+      chronic <- calc_chronic_gvhd_mod_severe(donor_data)
+      
+      donor_result <- tibble(
+        Quarter = q,
+        Donor_Type = donor,
+        N = chronic$n_total,
+        Events = chronic$n_events,
+        Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+      )
+      
+      all_chronic_mod_severe_donor_results <- bind_rows(all_chronic_mod_severe_donor_results, donor_result)
+    }
+  }
+}
+
+kable(all_chronic_mod_severe_donor_results,
+      col.names = c("Quarter", "Donor Type", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Quarter and Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## Chronic GVHD (Moderate-Severe) by Quarter, Donor Type, and CR Status
+
+```{r chronic-mod-severe-by-quarter-donor-cr}
+all_chronic_mod_severe_donor_cr_strat <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  for(cr_status in c("Complete Remission", "Not in Complete Remission")) {
+    cr_data <- q_data |> filter(disease_status_binary == cr_status)
+    
+    if(nrow(cr_data) > 0) {
+      donor_types <- unique(cr_data$donor_type_main)
+      
+      for(donor in donor_types) {
+        donor_data <- cr_data |> filter(donor_type_main == donor)
+        
+        if(nrow(donor_data) > 0) {
+          chronic <- calc_chronic_gvhd_mod_severe(donor_data)
+          
+          donor_cr_result <- tibble(
+            Quarter = q,
+            CR_Status = cr_status,
+            Donor_Type = donor,
+            N = chronic$n_total,
+            Events = chronic$n_events,
+            Rate = paste0(chronic$n_events, "/", chronic$n_total, " (", chronic$rate_pct, "%)")
+          )
+          
+          all_chronic_mod_severe_donor_cr_strat <- bind_rows(all_chronic_mod_severe_donor_cr_strat, donor_cr_result)
+        }
+      }
+    }
+  }
+}
+
+kable(all_chronic_mod_severe_donor_cr_strat,
+      col.names = c("Quarter", "CR Status", "Donor Type", "N", "Events", "Chronic GVHD (Mod-Severe) Rate (n/N %)"),
+      caption = "Chronic GVHD (Moderate-Severe) by Quarter, Donor Type, and Complete Remission Status") |>
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+---
+
+# Summary Tables
+
+## All GVHD Endpoints Summary by Quarter
+
+```{r summary-all-gvhd}
+summary_by_quarter <- tibble()
+
+for(q in quarters) {
+  q_data <- transplant_2025 |> filter(quarter_label == q)
+  
+  acute <- calc_acute_gvhd_ii_iv(q_data)
+  chronic_any <- calc_chronic_gvhd_any(q_data)
+  chronic_mild <- calc_chronic_gvhd_mild(q_data)
+  chronic_mod_severe <- calc_chronic_gvhd_mod_severe(q_data)
+  
+  q_summary <- tibble(
+    Quarter = q,
+    N = acute$n_total,
+    
+    Acute_II_IV_Events = acute$n_events,
+    Acute_II_IV_Rate = paste0(acute$n_events, "/", acute$n_total, " (", acute$rate_pct, "%)"),
+    
+    Chronic_Any_Events = chronic_any$n_events,
+    Chronic_Any_Rate = paste0(chronic_any$n_events, "/", chronic_any$n_total, " (", chronic_any$rate_pct, "%)"),
+    
+    Chronic_Mild_Events = chronic_mild$n_events,
+    Chronic_Mild_Rate = paste0(chronic_mild$n_events, "/", chronic_mild$n_total, " (", chronic_mild$rate_pct, "%)"),
+    
+    Chronic_ModSev_Events = chronic_mod_severe$n_events,
+    Chronic_ModSev_Rate = paste0(chronic_mod_severe$n_events, "/", chronic_mod_severe$n_total, " (", chronic_mod_severe$rate_pct, "%)")
+  )
+  
+  summary_by_quarter <- bind_rows(summary_by_quarter, q_summary)
+}
+
+kable(summary_by_quarter,
+      col.names = c("Quarter", "N", "Events", "Rate (n/N %)", "Events", "Rate (n/N %)", "Events", "Rate (n/N %)", "Events", "Rate (n/N %)"),
+      caption = "All GVHD Endpoints Summary by Quarter") |>
+  kable_styling(bootstrap_options = c("striped", "hover")) |>
+  add_header_above(c(" " = 2, "Acute GVHD II-IV" = 2, "Chronic GVHD (Any)" = 2, "Chronic GVHD (Mild)" = 2, "Chronic GVHD (Mod-Severe)" = 2))
+```
+
+## Overall GVHD Event Summary
+
+```{r summary-events}
+summary_table <- tibble(
+  Endpoint = c("Acute GVHD Grade II-IV", 
+               "Chronic GVHD (Any)",
+               "Chronic GVHD (Mild)",
+               "Chronic GVHD (Moderate-Severe)"),
+  Events = c(sum(transplant_2025$acute_gvhd_grade_ii_iv),
+             sum(transplant_2025$chronic_gvhd_any),
+             sum(transplant_2025$chronic_gvhd_mild),
+             sum(transplant_2025$chronic_gvhd_mod_severe)),
+  Rate = c(paste0(sum(transplant_2025$acute_gvhd_grade_ii_iv), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$acute_gvhd_grade_ii_iv), 1), "%)"),
+           paste0(sum(transplant_2025$chronic_gvhd_any), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_any), 1), "%)"),
+           paste0(sum(transplant_2025$chronic_gvhd_mild), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_mild), 1), "%)"),
+           paste0(sum(transplant_2025$chronic_gvhd_mod_severe), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_mod_severe), 1), "%)"))
+)
+
+kable(summary_table,
+      col.names = c("GVHD Endpoint", "Total Events", "Overall Rate (n/N %)"),
+      caption = "Summary of GVHD Endpoints - 2025 Cohort (N=26)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## Key Observations
+
+```{r key-findings}
+cat("**Acute GVHD Grade II-IV:**\n")
+cat("- Total events: ", sum(transplant_2025$acute_gvhd_grade_ii_iv), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$acute_gvhd_grade_ii_iv), 1), "%)\n", sep = "")
+cat("- Clinically significant acute GVHD requiring treatment\n\n")
+
+cat("**Chronic GVHD (Any):**\n")
+cat("- Total events: ", sum(transplant_2025$chronic_gvhd_any), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_any), 1), "%)\n", sep = "")
+cat("- May be underestimated due to limited follow-up\n\n")
+
+cat("**Chronic GVHD (Mild):**\n")
+cat("- Total events: ", sum(transplant_2025$chronic_gvhd_mild), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_mild), 1), "%)\n", sep = "")
+cat("- Limited/mild disease\n\n")
+
+cat("**Chronic GVHD (Moderate-Severe):**\n")
+cat("- Total events: ", sum(transplant_2025$chronic_gvhd_mod_severe), "/", nrow(transplant_2025), " (", round(100 * mean(transplant_2025$chronic_gvhd_mod_severe), 1), "%)\n", sep = "")
+cat("- Clinically significant chronic GVHD\n")
+```
+
+::: {.callout-important}
+## Important Limitations
+
+**Limited Follow-up for Chronic GVHD:**
+- Chronic GVHD typically develops 3-12+ months post-transplant
+- Q3 and Q4 2025 patients have insufficient follow-up
+- True chronic GVHD rates likely higher with longer follow-up
+
+**Median follow-up:** `r round(median(transplant_2025$days_to_event))` days
+
+**Interpretation:**
+- Acute GVHD rates are more reliable (occurs early post-transplant)
+- Chronic GVHD rates should be interpreted with caution
+- Longer follow-up needed for definitive chronic GVHD assessment
+:::
+
+---
+
+*Report generated on `r format(Sys.Date(), "%B %d, %Y")`*
+
+*Analysis includes only patients transplanted in calendar year 2025, organized by quarter (trimester)*
+
+*GVHD endpoints: Acute GVHD Grade II-IV, Chronic GVHD (Total, Mild, Moderate-Severe)*
