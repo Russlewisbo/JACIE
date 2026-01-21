@@ -1,0 +1,31 @@
+---
+title: "JACIE Cumulative Outcomes Report"
+subtitle: "2025 Annual Report - Rolling Cohort Analysis"
+author: "HSCT Program Quality Indicators"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+::: {.callout-note}
+## AI-Generated Report with Rolling Cohort Methodology
+
+This report was generated using AI under general human direction, following JACIE Italian methodology for rolling cohort analysis. At the time of generation, the contents have not been comprehensively reviewed by a human analyst.
+
+<!--
+To indicate human review: Delete the line above about contents not being reviewed, and replace this comment with:
+The contents have been reviewed and validated by [Your Name], [Your Role] on [Date].
+-->
+:::
