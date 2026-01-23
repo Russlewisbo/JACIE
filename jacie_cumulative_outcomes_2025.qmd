@@ -63,11 +63,9 @@ transplant_data_prepared <- transplant_data |>
       grepl("other cause", `State at last follow up`) ~ "Other",
       TRUE ~ "Unknown"
     ),
-    death_type = case_when(
-      death == 0 ~ "Alive",
-      death_cause == "Relapse" ~ "Relapse",
-      TRUE ~ "NRM"
-    ),
+    # Use death_type column directly from Excel file (TRM, NRM, RRM)
+    # Don't recalculate it
+    death_type = death_type,
     acute_gvhd_grade_ii_iv = case_when(
       !is.na(`acute GVHD global grade`) & `acute GVHD global grade` %in% c(2, 3, 4) ~ 1,
       TRUE ~ 0
@@ -169,7 +167,8 @@ calc_mortality <- function(cohort, days) {
                   n_events = NA_integer_, pct = NA_real_))
   }
   
-  n_deaths <- sum(cohort$death == 1 & cohort$days_to_event <= days)
+  # Count all deaths with a death_type (TRM, NRM, or RRM) within the timeframe
+  n_deaths <- sum(!is.na(cohort$death_type) & cohort$days_to_event <= days, na.rm = TRUE)
   
   tibble(
     timepoint = paste0(days, " days"),
@@ -186,7 +185,7 @@ calc_nrm <- function(cohort, days) {
                   n_events = NA_integer_, pct = NA_real_))
   }
   
-  n_nrm <- sum(cohort$death_type == "NRM" & cohort$days_to_event <= days)
+  n_nrm <- sum(cohort$death_type == "NRM" & cohort$days_to_event <= days, na.rm = TRUE)
   
   tibble(
     timepoint = paste0(days, " days"),
@@ -196,14 +195,14 @@ calc_nrm <- function(cohort, days) {
   )
 }
 
-# Relapse mortality calculation
+# Relapse mortality calculation (RRM - Relapse-Related Mortality)
 calc_relapse <- function(cohort, days) {
   if (nrow(cohort) == 0) {
     return(tibble(timepoint = paste0(days, " days"), n_cohort = 0,
                   n_events = NA_integer_, pct = NA_real_))
   }
   
-  n_relapse <- sum(cohort$death_type == "Relapse" & cohort$days_to_event <= days)
+  n_relapse <- sum(cohort$death_type == "RRM" & cohort$days_to_event <= days, na.rm = TRUE)
   
   tibble(
     timepoint = paste0(days, " days"),
@@ -220,7 +219,7 @@ calc_trm <- function(cohort, days) {
                   n_events = NA_integer_, pct = NA_real_))
   }
   
-  n_trm <- sum(cohort$death_type == "TRM" & cohort$days_to_event <= days)
+  n_trm <- sum(cohort$death_type == "TRM" & cohort$days_to_event <= days, na.rm = TRUE)
   
   tibble(
     timepoint = paste0(days, " days"),
@@ -408,7 +407,7 @@ Note that cohort sizes **differ** across timepoints because each represents a di
 The mortality percentages are cumulative and should generally increase at later timepoints (30d ≤ 100d ≤ 365d) as cumulative mortality accrues over time.
 :::
 
-### Mortality by Cause: TRM, NRM, and Relapse
+### Mortality by Cause: TRM, NRM, and RRM
 
 ```{r mortality-cause}
 cause_summary <- tibble(
@@ -416,11 +415,11 @@ cause_summary <- tibble(
   `Overall Mortality` = paste0(overall_mort$pct, "% (", overall_mort$n_events, "/", overall_mort$n_cohort, ")"),
   `TRM` = paste0(trm_overall$pct, "% (", trm_overall$n_events, "/", trm_overall$n_cohort, ")"),
   `NRM` = paste0(nrm_overall$pct, "% (", nrm_overall$n_events, "/", nrm_overall$n_cohort, ")"),
-  `Relapse` = paste0(relapse_overall$pct, "% (", relapse_overall$n_events, "/", relapse_overall$n_cohort, ")")
+  `RRM` = paste0(relapse_overall$pct, "% (", relapse_overall$n_events, "/", relapse_overall$n_cohort, ")")
 )
 
 kable(cause_summary,
-      caption = "Table 2: Cumulative Mortality Breakdown by Cause (Overall = TRM + NRM + Relapse)") |>
+      caption = "Table 2: Cumulative Mortality Breakdown by Cause (Overall = TRM + NRM + RRM)") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
   row_spec(0, bold = TRUE, background = "#E74C3C", color = "white")
 ```
@@ -437,9 +436,9 @@ kable(cause_summary,
 - Organ toxicity
 - Other transplant-related complications (not classified as TRM)
 
-**Relapse Mortality** includes deaths from disease progression or relapse.
+**RRM (Relapse-Related Mortality)** includes deaths from disease progression or relapse.
 
-At 365 days: **TRM = `r trm_overall$pct[3]`%**, **NRM = `r nrm_overall$pct[3]`%**, and **Relapse = `r relapse_overall$pct[3]`%**
+At 365 days: **TRM = `r trm_overall$pct[3]`%**, **NRM = `r nrm_overall$pct[3]`%**, and **RRM = `r relapse_overall$pct[3]`%**
 :::
 
 ---
@@ -455,11 +454,11 @@ plot_data <- bind_rows(
   overall_mort |> mutate(outcome = "Overall Mortality"),
   trm_overall |> mutate(outcome = "TRM"),
   nrm_overall |> mutate(outcome = "NRM"),
-  relapse_overall |> mutate(outcome = "Relapse")
+  relapse_overall |> mutate(outcome = "RRM")
 ) |>
   mutate(
     timepoint = factor(timepoint, levels = c("30 days", "100 days", "365 days")),
-    outcome = factor(outcome, levels = c("Overall Mortality", "TRM", "NRM", "Relapse"))
+    outcome = factor(outcome, levels = c("Overall Mortality", "TRM", "NRM", "RRM"))
   )
 
 ggplot(plot_data, aes(x = timepoint, y = pct, fill = outcome)) +
@@ -470,9 +469,9 @@ ggplot(plot_data, aes(x = timepoint, y = pct, fill = outcome)) +
   scale_fill_manual(values = c("Overall Mortality" = "#E74C3C", 
                                 "TRM" = "#9B59B6",
                                 "NRM" = "#E67E22",
-                                "Relapse" = "#3498DB")) +
+                                "RRM" = "#3498DB")) +
   labs(title = "Figure 1: Cumulative Mortality Outcomes by Timepoint",
-       subtitle = "Cumulative Rolling Cohort Analysis - 2025 (TRM, NRM, Relapse)",
+       subtitle = "Cumulative Rolling Cohort Analysis - 2025 (TRM, NRM, RRM)",
        x = "Time Post-HSCT", y = "Cumulative Percentage (%)",
        fill = "Outcome Type") +
   theme_minimal(base_size = 14) +
@@ -630,19 +629,19 @@ kable(bind_rows(
 
 ---
 
-## 3. Relapse-Related Mortality
+## 3. Relapse-Related Mortality (RRM)
 
 ```{r relapse-overall-table}
 kable(relapse_overall |>
   mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
   select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
-         `Relapse Deaths` = n_events, `Relapse Rate` = display),
-      caption = "Table 7: Cumulative Relapse-Related Mortality") |>
+         `RRM Deaths` = n_events, `RRM Rate` = display),
+      caption = "Table 7: Cumulative Relapse-Related Mortality (RRM)") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
   row_spec(0, bold = TRUE, background = "#3498DB", color = "white")
 ```
 
-### 3.1 Relapse Mortality by Disease Status
+### 3.1 RRM by Disease Status
 
 ```{r relapse-by-disease}
 kable(bind_rows(
@@ -651,8 +650,8 @@ kable(bind_rows(
 ) |>
   mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
   select(Group = group, Timepoint = timepoint, 
-         `Cohort Size` = n_cohort, `Relapse Deaths` = n_events, `Relapse Rate` = display),
-      caption = "Table 8: Relapse Mortality by Disease Status") |>
+         `Cohort Size` = n_cohort, `RRM Deaths` = n_events, `RRM Rate` = display),
+      caption = "Table 8: Relapse-Related Mortality (RRM) by Disease Status") |>
   kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
   pack_rows("Overall", 1, 3) |>
   pack_rows("Complete Remission", 4, 6) |>
@@ -660,16 +659,16 @@ kable(bind_rows(
 ```
 
 ::: {.callout-note}
-## Relapse Mortality Summary
+## RRM Summary
 
-- **365-day relapse mortality**: `r relapse_overall$pct[3]`%
+- **365-day RRM**: `r relapse_overall$pct[3]`%
 ```{r relapse-prop, results='asis'}
 if (!is.na(overall_mort$n_events[3]) && overall_mort$n_events[3] > 0) {
   relapse_prop <- round(100 * relapse_overall$n_events[3] / overall_mort$n_events[3], 0)
-  cat(paste0("- Relapse accounts for **", relapse_prop, "%** of all deaths at 365 days\n"))
+  cat(paste0("- RRM accounts for **", relapse_prop, "%** of all deaths at 365 days\n"))
 }
 ```
-- Not in CR patients show higher relapse mortality (`r relapse_not_cr$pct[3]`%) vs CR patients (`r relapse_cr$pct[3]`%)
+- Not in CR patients show higher RRM (`r relapse_not_cr$pct[3]`%) vs CR patients (`r relapse_cr$pct[3]`%)
 :::
 
 ---
@@ -1166,9 +1165,11 @@ kable(tibble(
 
 ## Key Definitions
 
-**NRM (Non-Relapse Mortality)**: Deaths from transplant-related complications (infection, GVHD, organ toxicity, other), excluding disease relapse/progression
+**TRM (Treatment-Related Mortality)**: Deaths directly attributed to the transplant procedure and immediate complications
 
-**Relapse Mortality**: Deaths from disease progression or relapse
+**NRM (Non-Relapse Mortality)**: Deaths from transplant-related complications (infection, GVHD, organ toxicity, other), excluding disease relapse/progression and TRM
+
+**RRM (Relapse-Related Mortality)**: Deaths from disease progression or relapse
 
 **Cumulative Rolling Cohort**: Patients selected based on when they REACHED the milestone during the specified date range, ensuring adequate follow-up time for outcome assessment
 
@@ -1183,7 +1184,7 @@ kable(tibble(
 
 1. **Overall mortality at 365 days**: `r overall_mort$pct[3]`%
 2. **Cumulative mortality progression**: 30d = `r overall_mort$pct[1]`% → 100d = `r overall_mort$pct[2]`% → 365d = `r overall_mort$pct[3]`%
-3. **NRM vs Relapse at 365 days**: `r nrm_overall$pct[3]`% (NRM) vs `r relapse_overall$pct[3]`% (Relapse)
+3. **Mortality breakdown at 365 days**: TRM = `r trm_overall$pct[3]`%, NRM = `r nrm_overall$pct[3]`%, RRM = `r relapse_overall$pct[3]`%
 4. **Disease status matters**: CR patients have better outcomes at all timepoints
 ```{r conclusion-gvhd, results='asis'}
 haplo_agvhd <- agvhd_by_donor |> filter(donor == "Haploidentical")
@@ -1197,4 +1198,4 @@ if (nrow(haplo_agvhd) > 0 && !is.na(haplo_agvhd$pct[1])) {
 
 *Report generated `r format(Sys.Date(), "%B %d, %Y")` using cumulative rolling cohort methodology per JACIE Italian guidelines*
 
-*NRM = Non-Relapse Mortality (deaths from transplant complications, not disease relapse)*
+*TRM = Treatment-Related Mortality; NRM = Non-Relapse Mortality; RRM = Relapse-Related Mortality*
