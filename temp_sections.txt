@@ -1,0 +1,200 @@
+## 4. GVHD Outcomes
+
+### 4.1 Acute GVHD Grade II-IV (100 days)
+
+```{r agvhd-table}
+kable(tibble(
+  Group = c("Overall", agvhd_by_donor$donor),
+  `Cohort Size` = c(agvhd_overall$n_cohort, agvhd_by_donor$n_cohort),
+  Events = c(agvhd_overall$n_events, agvhd_by_donor$n_events),
+  `Cumulative Incidence` = paste0(c(agvhd_overall$pct, agvhd_by_donor$pct), "%")
+),
+      caption = "Table 9: Acute GVHD Grade II-IV by Donor Type (100 days)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(1, bold = TRUE, background = "#9B59B6", color = "white")
+```
+
+```{r agvhd-plot, fig.width=10, fig.height=6}
+agvhd_plot_data <- agvhd_by_donor |>
+  filter(!is.na(pct)) |>
+  mutate(donor = factor(donor, levels = c("Sibling HLA-identical", "Haploidentical", "MUD")))
+
+if (nrow(agvhd_plot_data) > 0) {
+  ggplot(agvhd_plot_data, aes(x = donor, y = pct, fill = donor)) +
+    geom_col(width = 0.6, show.legend = FALSE) +
+    geom_text(aes(label = paste0(pct, "%\n(", n_events, "/", n_cohort, ")")),
+              vjust = -0.5, size = 4, fontface = "bold") +
+    scale_fill_manual(values = c("Sibling HLA-identical" = "#3498DB", 
+                                  "Haploidentical" = "#E67E22", "MUD" = "#9B59B6")) +
+    labs(title = "Figure 2: Acute GVHD Grade II-IV by Donor Type",
+         subtitle = "Cumulative incidence at 100 days post-HSCT (Cumulative Rolling Cohort)",
+         x = "Donor Type", y = "Cumulative Incidence (%)") +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(face = "bold", size = 16),
+          panel.grid.minor = element_blank()) +
+    ylim(0, max(agvhd_plot_data$pct, na.rm = TRUE) * 1.3)
+}
+```
+
+### 4.2 Chronic GVHD (365 days)
+
+```{r cgvhd-table}
+kable(cgvhd_any |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(Severity = severity, `Cohort Size` = n_cohort, 
+         Events = n_events, `Cumulative Incidence` = display),
+      caption = "Table 10: Chronic GVHD Cumulative Incidence (365 days)") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#27AE60", color = "white")
+```
+
+---
+
+## 5. Comprehensive Outcomes by Donor Type
+
+```{r donor-comparison}
+mort_by_donor <- tibble()
+nrm_by_donor <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  mort_result <- calc_mortality(cohort_365d_donor, 365) |> mutate(donor = donor)
+  nrm_result <- calc_nrm(cohort_365d_donor, 365) |> mutate(donor = donor)
+  
+  mort_by_donor <- bind_rows(mort_by_donor, mort_result)
+  nrm_by_donor <- bind_rows(nrm_by_donor, nrm_result)
+}
+
+kable(tibble(
+  `Donor Type` = mort_by_donor$donor,
+  `365-Day Mortality` = paste0(mort_by_donor$pct, "% (", mort_by_donor$n_events, "/", mort_by_donor$n_cohort, ")"),
+  `NRM at 365 Days` = paste0(nrm_by_donor$pct, "% (", nrm_by_donor$n_events, "/", nrm_by_donor$n_cohort, ")"),
+  `Acute GVHD II-IV` = paste0(agvhd_by_donor$pct, "% (", agvhd_by_donor$n_events, "/", agvhd_by_donor$n_cohort, ")")
+),
+      caption = "Table 11: Comprehensive Outcomes by Donor Type") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white")
+```
+
+---
+
+## 6. Mortality Outcomes by Donor Type
+
+### 6.1 Overall Mortality by Donor Type (All Timepoints)
+
+```{r mort-by-donor-all-timepoints}
+mort_donor_all <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_30d_donor <- select_cohort_30d(donor_data, report_year)
+  cohort_100d_donor <- select_cohort_100d(donor_data, report_year)
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  
+  donor_mort <- bind_rows(
+    calc_mortality(cohort_30d_donor, 30),
+    calc_mortality(cohort_100d_donor, 100),
+    calc_mortality(cohort_365d_donor, 365)
+  ) |> mutate(donor = donor)
+  
+  mort_donor_all <- bind_rows(mort_donor_all, donor_mort)
+}
+
+kable(mort_donor_all |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(`Donor Type` = donor, Timepoint = timepoint,
+         `Cohort Size` = n_cohort, Deaths = n_events, `Mortality Rate` = display),
+      caption = "Table 13: Overall Mortality by Donor Type Across All Timepoints") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  pack_rows("Sibling HLA-identical", 1, 3, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("Haploidentical", 4, 6, label_row_css = "background-color: #E67E22; color: white;") |>
+  pack_rows("MUD", 7, 9, label_row_css = "background-color: #9B59B6; color: white;")
+```
+
+### 6.2 NRM by Donor Type (All Timepoints)
+
+```{r nrm-by-donor-all-timepoints}
+nrm_donor_all <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_30d_donor <- select_cohort_30d(donor_data, report_year)
+  cohort_100d_donor <- select_cohort_100d(donor_data, report_year)
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  
+  donor_nrm <- bind_rows(
+    calc_nrm(cohort_30d_donor, 30),
+    calc_nrm(cohort_100d_donor, 100),
+    calc_nrm(cohort_365d_donor, 365)
+  ) |> mutate(donor = donor)
+  
+  nrm_donor_all <- bind_rows(nrm_donor_all, donor_nrm)
+}
+
+kable(nrm_donor_all |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(`Donor Type` = donor, Timepoint = timepoint,
+         `Cohort Size` = n_cohort, `NRM Events` = n_events, `NRM Rate` = display),
+      caption = "Table 14: Non-Relapse Mortality by Donor Type Across All Timepoints") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  pack_rows("Sibling HLA-identical", 1, 3, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("Haploidentical", 4, 6, label_row_css = "background-color: #E67E22; color: white;") |>
+  pack_rows("MUD", 7, 9, label_row_css = "background-color: #9B59B6; color: white;")
+```
+
+### 6.3 Relapse Mortality by Donor Type (All Timepoints)
+
+```{r relapse-by-donor-all-timepoints}
+relapse_donor_all <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_30d_donor <- select_cohort_30d(donor_data, report_year)
+  cohort_100d_donor <- select_cohort_100d(donor_data, report_year)
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  
+  donor_relapse <- bind_rows(
+    calc_relapse(cohort_30d_donor, 30),
+    calc_relapse(cohort_100d_donor, 100),
+    calc_relapse(cohort_365d_donor, 365)
+  ) |> mutate(donor = donor)
+  
+  relapse_donor_all <- bind_rows(relapse_donor_all, donor_relapse)
+}
+
+kable(relapse_donor_all |>
+  mutate(display = paste0(pct, "% (", n_events, "/", n_cohort, ")")) |>
+  select(`Donor Type` = donor, Timepoint = timepoint,
+         `Cohort Size` = n_cohort, `Relapse Deaths` = n_events, `Relapse Rate` = display),
+      caption = "Table 15: Relapse Mortality by Donor Type Across All Timepoints") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  pack_rows("Sibling HLA-identical", 1, 3, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("Haploidentical", 4, 6, label_row_css = "background-color: #E67E22; color: white;") |>
+  pack_rows("MUD", 7, 9, label_row_css = "background-color: #9B59B6; color: white;")
+```
+
+### 6.4 TRM by Donor Type (All Timepoints)
+
+```{r trm-by-donor-all-timepoints}
+trm_donor_all <- tibble()
+
+for (donor in major_donors) {
+  donor_data <- transplant_data_prepared |> filter(donor_type_main == donor)
+  
+  cohort_30d_donor <- select_cohort_30d(donor_data, report_year)
+  cohort_100d_donor <- select_cohort_100d(donor_data, report_year)
+  cohort_365d_donor <- select_cohort_365d(donor_data, report_year)
+  
+  donor_trm <- bind_rows(
+    calc_trm(cohort_30d_donor, 30),
+    calc_trm(cohort_100d_donor, 100),
+    calc_trm(cohort_365d_donor, 365)
+  ) |> mutate(donor = donor)
+  
+  trm_donor_all <- bind_rows(trm_donor_all, donor_trm)
+}
