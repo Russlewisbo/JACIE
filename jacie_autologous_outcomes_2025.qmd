@@ -1,0 +1,772 @@
+---
+title: "JACIE Autologous Transplant Outcomes Report"
+subtitle: "2024-2025 Annual Report - Rolling Cohort Analysis"
+author: "HSCT Program Quality Indicators"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    embed-resources: true
+    fig-width: 10
+    fig-height: 6
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(lubridate)
+library(ggplot2)
+
+# Load autologous transplant data
+auto_data <- read_excel("Autologhi 2025.xlsx")
+
+# Data preparation
+auto_prepared <- auto_data |>
+  mutate(
+    # Parse transplant date
+    hsct_date = as.Date(`Data HCT`),
+    hsct_year = year(hsct_date),
+    
+    # Parse follow-up date (handle Excel dates)
+    follow_up_date = case_when(
+      grepl("/", `Follow-up`) ~ dmy(`Follow-up`),
+      TRUE ~ as.Date(as.numeric(`Follow-up`), origin = "1899-12-30")
+    ),
+    
+    # Parse birth date (handle Excel dates)  
+    birth_date = case_when(
+      grepl("/", `Data di nascita`) ~ dmy(`Data di nascita`),
+      TRUE ~ as.Date(as.numeric(`Data di nascita`), origin = "1899-12-30")
+    ),
+    
+    # Calculate age at transplant
+    age_at_hsct = as.numeric(difftime(hsct_date, birth_date, units = "days")) / 365.25,
+    
+    # Calculate days of follow-up
+    days_follow_up = as.numeric(difftime(follow_up_date, hsct_date, units = "days")),
+    
+    # Death status (Alive = "no" means dead)
+    death = case_when(
+      Alive == "no" ~ 1,
+      Alive == "lost" ~ NA_real_,  # Lost to follow-up
+      TRUE ~ 0
+    ),
+    
+    # TRM status from column
+    trm_death = TRM,
+    
+    # Lost to follow-up flag
+    lost_to_followup = ifelse(Alive == "lost", 1, 0),
+    
+    # Clean diagnosis
+    diagnosis_clean = case_when(
+      DIAGNOSI %in% c("MM") ~ "Multiple Myeloma (MM)",
+      DIAGNOSI %in% c("LNH", "NHL") ~ "Non-Hodgkin Lymphoma (NHL)",
+      DIAGNOSI %in% c("LH", "HL") ~ "Hodgkin Lymphoma (HL)",
+      TRUE ~ DIAGNOSI
+    )
+  )
+
+# Exclude lost to follow-up for analysis
+auto_evaluable <- auto_prepared |> filter(lost_to_followup == 0)
+
+# Identify lost to follow-up patients
+lost_patients <- auto_prepared |> filter(lost_to_followup == 1)
+
+report_year <- 2025
+```
+
+# Executive Summary
+
+## Reporting Period and Methodology
+
+**Reporting Period:** Calendar Years 2024 and 2025
+
+**Methodology:** Cumulative Rolling Cohort Analysis following JACIE Italian guidelines
+
+::: {.callout-important}
+## Cumulative Rolling Cohort Methodology
+
+This report uses **cumulative rolling cohort analysis** as specified by JACIE Italy. For each timepoint, we calculate outcomes for patients who reached that milestone during the specified reporting period.
+
+**Key principle**: Patients are selected based on when they **reached** each milestone (100 days or 365 days post-transplant), not just when they were transplanted.
+
+**Cohort Selection:**
+
+- **100-day outcome**: Patients whose 100-day milestone fell within the reporting period
+- **365-day outcome**: Patients whose 365-day milestone fell within the reporting period
+
+This ensures adequate follow-up time for each patient included in the analysis.
+:::
+
+```{r rolling-functions}
+# Rolling cohort selection functions for autologous transplants
+
+# For 100-day outcomes
+select_cohort_100d <- function(data, year) {
+  milestone_start <- as.Date(paste0(year - 1, "-07-01"))
+  milestone_end <- as.Date(paste0(year, "-09-30"))
+  
+  cohort <- data |>
+    mutate(milestone_100d = hsct_date + days(100)) |>
+    filter(
+      milestone_100d >= milestone_start,
+      milestone_100d <= milestone_end,
+      days_follow_up >= 100 | death == 1
+    )
+  
+  return(cohort)
+}
+
+# For 365-day outcomes
+select_cohort_365d <- function(data, year) {
+  milestone_start <- as.Date(paste0(year - 1, "-01-01"))
+  milestone_end <- as.Date(paste0(year, "-12-31"))
+  
+  cohort <- data |>
+    mutate(milestone_365d = hsct_date + days(365)) |>
+    filter(
+      milestone_365d >= milestone_start,
+      milestone_365d <= milestone_end,
+      days_follow_up >= 365 | death == 1
+    )
+  
+  return(cohort)
+}
+
+# OS calculation
+calc_os <- function(cohort, days) {
+  if (nrow(cohort) == 0) {
+    return(tibble(timepoint = paste0(days, " days"), n_cohort = 0,
+                  n_deaths = NA_integer_, mortality_pct = NA_real_, os_pct = NA_real_))
+  }
+  
+  n_deaths <- sum(cohort$death == 1 & cohort$days_follow_up <= days, na.rm = TRUE)
+  
+  tibble(
+    timepoint = paste0(days, " days"),
+    n_cohort = nrow(cohort),
+    n_deaths = n_deaths,
+    mortality_pct = round(100 * n_deaths / nrow(cohort), 1),
+    os_pct = round(100 * (1 - n_deaths / nrow(cohort)), 1)
+  )
+}
+
+# TRM calculation
+calc_trm <- function(cohort, days) {
+  if (nrow(cohort) == 0) {
+    return(tibble(timepoint = paste0(days, " days"), n_cohort = 0,
+                  n_trm = NA_integer_, trm_pct = NA_real_))
+  }
+  
+  n_trm <- sum(cohort$trm_death == 1 & cohort$days_follow_up <= days, na.rm = TRUE)
+  
+  tibble(
+    timepoint = paste0(days, " days"),
+    n_cohort = nrow(cohort),
+    n_trm = n_trm,
+    trm_pct = round(100 * n_trm / nrow(cohort), 1)
+  )
+}
+```
+
+```{r calculate-results}
+# 2025 Cohorts
+cohort_100d_2025 <- select_cohort_100d(auto_evaluable, 2025)
+cohort_365d_2025 <- select_cohort_365d(auto_evaluable, 2025)
+
+# 2024 Cohorts
+cohort_100d_2024 <- select_cohort_100d(auto_evaluable, 2024)
+cohort_365d_2024 <- select_cohort_365d(auto_evaluable, 2024)
+
+# Calculate OS
+os_100d_2025 <- calc_os(cohort_100d_2025, 100)
+os_365d_2025 <- calc_os(cohort_365d_2025, 365)
+os_100d_2024 <- calc_os(cohort_100d_2024, 100)
+os_365d_2024 <- calc_os(cohort_365d_2024, 365)
+
+# Calculate TRM
+trm_100d_2025 <- calc_trm(cohort_100d_2025, 100)
+trm_365d_2025 <- calc_trm(cohort_365d_2025, 365)
+trm_100d_2024 <- calc_trm(cohort_100d_2024, 100)
+trm_365d_2024 <- calc_trm(cohort_365d_2024, 365)
+
+# Descriptive statistics
+age_stats <- auto_evaluable |>
+  summarise(
+    n = n(),
+    mean_age = mean(age_at_hsct, na.rm = TRUE),
+    sd_age = sd(age_at_hsct, na.rm = TRUE),
+    median_age = median(age_at_hsct, na.rm = TRUE),
+    min_age = min(age_at_hsct, na.rm = TRUE),
+    max_age = max(age_at_hsct, na.rm = TRUE)
+  )
+
+followup_stats <- auto_evaluable |>
+  summarise(
+    mean_fu = mean(days_follow_up, na.rm = TRUE),
+    sd_fu = sd(days_follow_up, na.rm = TRUE),
+    median_fu = median(days_follow_up, na.rm = TRUE),
+    min_fu = min(days_follow_up, na.rm = TRUE),
+    max_fu = max(days_follow_up, na.rm = TRUE)
+  )
+```
+
+## Key Findings Summary
+
+### 2025 Autologous Transplant Outcomes
+
+```{r summary-2025-table}
+summary_2025 <- tibble(
+  Endpoint = c("Overall Survival (OS)", "Overall Survival (OS)", 
+               "Treatment-Related Mortality (TRM)", "Treatment-Related Mortality (TRM)"),
+  Timepoint = c("100 days", "365 days", "100 days", "365 days"),
+  `Cohort Size` = c(os_100d_2025$n_cohort, os_365d_2025$n_cohort,
+                    trm_100d_2025$n_cohort, trm_365d_2025$n_cohort),
+  Events = c(os_100d_2025$n_deaths, os_365d_2025$n_deaths,
+             trm_100d_2025$n_trm, trm_365d_2025$n_trm),
+  Rate = c(paste0(os_100d_2025$os_pct, "%"), paste0(os_365d_2025$os_pct, "%"),
+           paste0(trm_100d_2025$trm_pct, "%"), paste0(trm_365d_2025$trm_pct, "%"))
+)
+
+kable(summary_2025,
+      caption = "Table 1: 2025 Autologous Transplant Outcomes - Rolling Cohort Analysis") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#3498DB", color = "white") |>
+  pack_rows("Overall Survival", 1, 2, label_row_css = "background-color: #27AE60; color: white;") |>
+  pack_rows("Treatment-Related Mortality", 3, 4, label_row_css = "background-color: #E74C3C; color: white;")
+```
+
+::: {.callout-tip}
+## 2025 Outcomes Highlights
+
+**Overall Survival:**
+
+- **100-day OS**: `r os_100d_2025$os_pct`% (`r os_100d_2025$n_cohort - os_100d_2025$n_deaths`/`r os_100d_2025$n_cohort` patients alive)
+- **365-day OS**: `r os_365d_2025$os_pct`% (`r os_365d_2025$n_cohort - os_365d_2025$n_deaths`/`r os_365d_2025$n_cohort` patients alive)
+
+**Treatment-Related Mortality:**
+
+- **100-day TRM**: `r trm_100d_2025$trm_pct`% (`r trm_100d_2025$n_trm`/`r trm_100d_2025$n_cohort` patients)
+- **365-day TRM**: `r trm_365d_2025$trm_pct`% (`r trm_365d_2025$n_trm`/`r trm_365d_2025$n_cohort` patients)
+:::
+
+---
+
+# Detailed Results
+
+## 1. Cohort Description
+
+### 1.1 Patient Population
+
+```{r cohort-description}
+cohort_desc <- tibble(
+  Category = c("Total patients in database", 
+               "Lost to follow-up",
+               "Evaluable patients",
+               "2024 transplants",
+               "2025 transplants"),
+  N = c(nrow(auto_prepared),
+        sum(auto_prepared$lost_to_followup),
+        nrow(auto_evaluable),
+        sum(auto_evaluable$hsct_year == 2024),
+        sum(auto_evaluable$hsct_year == 2025))
+)
+
+kable(cohort_desc,
+      caption = "Table 2: Patient Population Overview") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white") |>
+  row_spec(3, bold = TRUE, background = "#ECF0F1")
+```
+
+::: {.callout-warning}
+## Lost to Follow-up
+
+**1 patient** was lost to follow-up and excluded from the analysis:
+
+```{r lost-to-followup}
+if (nrow(lost_patients) > 0) {
+  lost_patients |>
+    select(PAZIENTE, DIAGNOSI, hsct_date) |>
+    mutate(hsct_date = as.character(hsct_date)) |>
+    rename(Patient = PAZIENTE, Diagnosis = DIAGNOSI, `HSCT Date` = hsct_date) |>
+    kable() |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+}
+```
+:::
+
+### 1.2 Age at Transplant
+
+```{r age-table}
+age_summary <- tibble(
+  Statistic = c("Mean (SD)", "Median", "Range"),
+  Value = c(
+    sprintf("%.1f years (SD: %.1f)", age_stats$mean_age, age_stats$sd_age),
+    sprintf("%.1f years", age_stats$median_age),
+    sprintf("%.1f - %.1f years", age_stats$min_age, age_stats$max_age)
+  )
+)
+
+kable(age_summary,
+      caption = "Table 3: Age at Transplant") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#9B59B6", color = "white")
+```
+
+### 1.3 Follow-up Duration
+
+```{r followup-table}
+followup_summary <- tibble(
+  Statistic = c("Mean", "Median", "Range"),
+  Days = c(
+    sprintf("%.1f days", followup_stats$mean_fu),
+    sprintf("%.0f days", followup_stats$median_fu),
+    sprintf("%.0f - %.0f days", followup_stats$min_fu, followup_stats$max_fu)
+  ),
+  Months = c(
+    sprintf("%.1f months", followup_stats$mean_fu / 30.44),
+    sprintf("%.1f months", followup_stats$median_fu / 30.44),
+    sprintf("%.1f - %.1f months", followup_stats$min_fu / 30.44, followup_stats$max_fu / 30.44)
+  )
+)
+
+kable(followup_summary,
+      caption = "Table 4: Follow-up Duration") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#E67E22", color = "white")
+```
+
+### 1.4 Diagnosis Distribution
+
+```{r diagnosis-table}
+diag_table <- auto_evaluable |>
+  count(diagnosis_clean, name = "N") |>
+  mutate(Percentage = sprintf("%.1f%%", 100 * N / sum(N))) |>
+  arrange(desc(N)) |>
+  rename(Diagnosis = diagnosis_clean)
+
+kable(diag_table,
+      caption = "Table 5: Diagnosis Distribution") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#27AE60", color = "white")
+```
+
+```{r diagnosis-plot, fig.width=8, fig.height=5}
+diag_plot <- auto_evaluable |>
+  count(diagnosis_clean) |>
+  mutate(
+    pct = round(100 * n / sum(n), 1),
+    label = paste0(diagnosis_clean, "\n", n, " (", pct, "%)")
+  )
+
+ggplot(diag_plot, aes(x = reorder(diagnosis_clean, -n), y = n, fill = diagnosis_clean)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(aes(label = paste0(n, "\n(", pct, "%)")), vjust = -0.3, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("Multiple Myeloma (MM)" = "#3498DB", 
+                                "Non-Hodgkin Lymphoma (NHL)" = "#E67E22",
+                                "Hodgkin Lymphoma (HL)" = "#9B59B6")) +
+  labs(title = "Figure 1: Diagnosis Distribution",
+       subtitle = "Autologous Transplant Cohort 2024-2025",
+       x = "Diagnosis", y = "Number of Patients") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        axis.text.x = element_text(size = 10)) +
+  ylim(0, max(diag_plot$n) * 1.15)
+```
+
+### 1.5 Transplant Year Distribution
+
+```{r year-table}
+year_table <- auto_evaluable |>
+  count(hsct_year, name = "N") |>
+  mutate(Percentage = sprintf("%.1f%%", 100 * N / sum(N))) |>
+  rename(Year = hsct_year)
+
+kable(year_table,
+      caption = "Table 6: Transplant Year Distribution") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#34495E", color = "white")
+```
+
+---
+
+## 2. Overall Survival (OS)
+
+### 2.1 OS - 2025 Analysis
+
+```{r os-2025-table}
+os_2025_combined <- bind_rows(os_100d_2025, os_365d_2025) |>
+  mutate(
+    `Alive (n)` = n_cohort - n_deaths,
+    `OS Rate` = paste0(os_pct, "%"),
+    `Mortality Rate` = paste0(mortality_pct, "%")
+  ) |>
+  select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
+         Deaths = n_deaths, `Alive (n)`, `OS Rate`, `Mortality Rate`)
+
+kable(os_2025_combined,
+      caption = "Table 7: Overall Survival - 2025 Rolling Cohort") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#27AE60", color = "white")
+```
+
+### 2.2 OS - 2024 Analysis
+
+```{r os-2024-table}
+if (nrow(cohort_100d_2024) > 0) {
+  os_2024_combined <- bind_rows(
+    os_100d_2024,
+    if (nrow(cohort_365d_2024) > 0) os_365d_2024 else tibble(
+      timepoint = "365 days", n_cohort = 0, n_deaths = NA, 
+      mortality_pct = NA, os_pct = NA
+    )
+  ) |>
+    mutate(
+      `Alive (n)` = ifelse(is.na(n_deaths), NA, n_cohort - n_deaths),
+      `OS Rate` = ifelse(is.na(os_pct), "N/A*", paste0(os_pct, "%")),
+      `Mortality Rate` = ifelse(is.na(mortality_pct), "N/A*", paste0(mortality_pct, "%"))
+    ) |>
+    select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
+           Deaths = n_deaths, `Alive (n)`, `OS Rate`, `Mortality Rate`)
+  
+  kable(os_2024_combined,
+        caption = "Table 8: Overall Survival - 2024 Rolling Cohort") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+    row_spec(0, bold = TRUE, background = "#3498DB", color = "white")
+}
+```
+
+::: {.callout-note}
+## Note on 2024 365-Day Analysis
+
+*N/A: No patients transplanted in 2024 had reached their 365-day milestone within the 2024 reporting period (milestone dates: Jan 1, 2023 - Dec 31, 2024). These patients are captured in the 2025 rolling cohort analysis.
+:::
+
+---
+
+## 3. Treatment-Related Mortality (TRM)
+
+### 3.1 TRM - 2025 Analysis
+
+```{r trm-2025-table}
+trm_2025_combined <- bind_rows(trm_100d_2025, trm_365d_2025) |>
+  mutate(
+    `TRM Rate` = paste0(trm_pct, "%"),
+    Display = paste0(n_trm, "/", n_cohort, " (", trm_pct, "%)")
+  ) |>
+  select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
+         `TRM Deaths` = n_trm, `TRM Rate`, `n/N (%)` = Display)
+
+kable(trm_2025_combined,
+      caption = "Table 9: Treatment-Related Mortality - 2025 Rolling Cohort") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#E74C3C", color = "white")
+```
+
+### 3.2 TRM - 2024 Analysis
+
+```{r trm-2024-table}
+if (nrow(cohort_100d_2024) > 0) {
+  trm_2024_combined <- bind_rows(
+    trm_100d_2024,
+    if (nrow(cohort_365d_2024) > 0) trm_365d_2024 else tibble(
+      timepoint = "365 days", n_cohort = 0, n_trm = NA, trm_pct = NA
+    )
+  ) |>
+    mutate(
+      `TRM Rate` = ifelse(is.na(trm_pct), "N/A*", paste0(trm_pct, "%")),
+      Display = ifelse(is.na(n_trm), "N/A*", paste0(n_trm, "/", n_cohort, " (", trm_pct, "%)"))
+    ) |>
+    select(Timepoint = timepoint, `Cohort Size` = n_cohort, 
+           `TRM Deaths` = n_trm, `TRM Rate`, `n/N (%)` = Display)
+  
+  kable(trm_2024_combined,
+        caption = "Table 10: Treatment-Related Mortality - 2024 Rolling Cohort") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+    row_spec(0, bold = TRUE, background = "#E67E22", color = "white")
+}
+```
+
+### 3.3 Death Details
+
+```{r death-details}
+deaths <- auto_evaluable |> filter(death == 1)
+
+if (nrow(deaths) > 0) {
+  death_table <- deaths |>
+    select(PAZIENTE, diagnosis_clean, hsct_date, days_follow_up, trm_death) |>
+    mutate(
+      hsct_date = format(hsct_date, "%B %d, %Y"),
+      TRM = ifelse(trm_death == 1, "Yes", "No")
+    ) |>
+    select(-trm_death) |>
+    rename(Patient = PAZIENTE, Diagnosis = diagnosis_clean, 
+           `HSCT Date` = hsct_date, `Days to Death` = days_follow_up)
+  
+  kable(death_table,
+        caption = "Table 11: Details of Deceased Patients") |>
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+    row_spec(0, bold = TRUE, background = "#C0392B", color = "white")
+}
+```
+
+```{r death-summary, results='asis'}
+deaths <- auto_evaluable |> filter(death == 1)
+n_deaths <- nrow(deaths)
+n_trm <- sum(deaths$trm_death == 1, na.rm = TRUE)
+n_nrm <- n_deaths - n_trm
+
+cat("::: {.callout-important}\n")
+cat("## Death Summary\n\n")
+cat(sprintf("**Total deaths:** %d\n\n", n_deaths))
+
+if (n_trm == n_deaths && n_deaths > 0) {
+  cat("**All deaths were treatment-related (TRM)**\n\n")
+} else if (n_trm == 0 && n_deaths > 0) {
+  cat("**No deaths were treatment-related (TRM)**\n\n")
+} else if (n_deaths > 0) {
+  cat(sprintf("**Death classification:**\n\n"))
+  cat(sprintf("- TRM deaths: %d\n", n_trm))
+  cat(sprintf("- Non-TRM deaths (NRM): %d\n\n", n_nrm))
+}
+
+# List each death with classification
+if (n_deaths > 0) {
+  cat("**Individual patient details:**\n\n")
+  for (i in 1:nrow(deaths)) {
+    patient <- deaths$PAZIENTE[i]
+    days <- deaths$days_follow_up[i]
+    trm_status <- ifelse(deaths$trm_death[i] == 1, "TRM", "NRM")
+    cat(sprintf("- **%s**: Day %d death (%s)\n", patient, days, trm_status))
+  }
+}
+
+cat(":::\n")
+```
+
+---
+
+## 4. JACIE Comparison: 2024 vs 2025
+
+```{r jacie-comparison-table}
+jacie_comparison <- tibble(
+  Year = c("2024", "2024", "2024", "2024", "2025", "2025", "2025", "2025"),
+  Endpoint = rep(c("OS", "OS", "TRM", "TRM"), 2),
+  Timepoint = rep(c("100 days", "365 days"), 4),
+  `Cohort Size` = c(
+    os_100d_2024$n_cohort, 
+    ifelse(nrow(cohort_365d_2024) == 0, 0, os_365d_2024$n_cohort),
+    trm_100d_2024$n_cohort, 
+    ifelse(nrow(cohort_365d_2024) == 0, 0, trm_365d_2024$n_cohort),
+    os_100d_2025$n_cohort, os_365d_2025$n_cohort,
+    trm_100d_2025$n_cohort, trm_365d_2025$n_cohort
+  ),
+  Events = c(
+    os_100d_2024$n_deaths, 
+    ifelse(nrow(cohort_365d_2024) == 0, NA, os_365d_2024$n_deaths),
+    trm_100d_2024$n_trm, 
+    ifelse(nrow(cohort_365d_2024) == 0, NA, trm_365d_2024$n_trm),
+    os_100d_2025$n_deaths, os_365d_2025$n_deaths,
+    trm_100d_2025$n_trm, trm_365d_2025$n_trm
+  ),
+  Rate = c(
+    paste0(os_100d_2024$os_pct, "%"), 
+    ifelse(nrow(cohort_365d_2024) == 0, "N/A*", paste0(os_365d_2024$os_pct, "%")),
+    paste0(trm_100d_2024$trm_pct, "%"), 
+    ifelse(nrow(cohort_365d_2024) == 0, "N/A*", paste0(trm_365d_2024$trm_pct, "%")),
+    paste0(os_100d_2025$os_pct, "%"), paste0(os_365d_2025$os_pct, "%"),
+    paste0(trm_100d_2025$trm_pct, "%"), paste0(trm_365d_2025$trm_pct, "%")
+  )
+)
+
+kable(jacie_comparison,
+      caption = "Table 12: JACIE Comparison - 2024 vs 2025 Autologous Transplant Outcomes") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#2C3E50", color = "white") |>
+  pack_rows("2024", 1, 4, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("2025", 5, 8, label_row_css = "background-color: #27AE60; color: white;")
+```
+
+```{r comparison-plot, fig.width=10, fig.height=6}
+# Create comparison plot for 2025 (where we have complete data)
+plot_data <- tibble(
+  Timepoint = factor(c("100 days", "365 days", "100 days", "365 days"),
+                     levels = c("100 days", "365 days")),
+  Outcome = factor(c("OS", "OS", "TRM", "TRM"),
+                   levels = c("OS", "TRM")),
+  Rate = c(os_100d_2025$os_pct, os_365d_2025$os_pct,
+           trm_100d_2025$trm_pct, trm_365d_2025$trm_pct),
+  N = c(os_100d_2025$n_cohort, os_365d_2025$n_cohort,
+        trm_100d_2025$n_cohort, trm_365d_2025$n_cohort),
+  Events = c(os_100d_2025$n_deaths, os_365d_2025$n_deaths,
+             trm_100d_2025$n_trm, trm_365d_2025$n_trm)
+)
+
+ggplot(plot_data, aes(x = Timepoint, y = Rate, fill = Outcome)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = paste0(Rate, "%\n(n=", N, ")")),
+            position = position_dodge(width = 0.6),
+            vjust = -0.3, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("OS" = "#27AE60", "TRM" = "#E74C3C"),
+                    labels = c("Overall Survival", "Treatment-Related Mortality")) +
+  labs(title = "Figure 2: 2025 Autologous Transplant Outcomes",
+       subtitle = "Overall Survival and TRM at 100 and 365 Days (Rolling Cohort Analysis)",
+       x = "Timepoint", y = "Rate (%)",
+       fill = "Outcome") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        legend.position = "top") +
+  ylim(0, 110)
+```
+
+---
+
+# Methodology
+
+## Cumulative Rolling Cohort Breakdown
+
+The following table shows the detailed breakdown of each rolling cohort used in the analysis, including the number of patients selected and the time periods used for selection.
+
+```{r cohort-breakdown-table}
+# Calculate HSCT date ranges for each cohort
+cohort_breakdown <- tibble(
+  Year = c("2024", "2024", "2025", "2025"),
+  Timepoint = c("100 days", "365 days", "100 days", "365 days"),
+  `Milestone Date Range` = c(
+    "Jul 1, 2023 - Sep 30, 2024",
+    "Jan 1, 2023 - Dec 31, 2024",
+    "Jul 1, 2024 - Sep 30, 2025",
+    "Jan 1, 2024 - Dec 31, 2025"
+  ),
+  `HSCT Date Range` = c(
+    "Mar 23, 2023 - Jun 22, 2024",
+    "Jan 1, 2022 - Dec 31, 2023",
+    "Mar 23, 2024 - Jun 22, 2025",
+    "Jan 1, 2023 - Dec 31, 2024"
+  ),
+  `Patients Selected` = c(
+    nrow(cohort_100d_2024),
+    nrow(cohort_365d_2024),
+    nrow(cohort_100d_2025),
+    nrow(cohort_365d_2025)
+  ),
+  `Deaths` = c(
+    sum(cohort_100d_2024$death == 1 & cohort_100d_2024$days_follow_up <= 100, na.rm = TRUE),
+    ifelse(nrow(cohort_365d_2024) > 0, 
+           sum(cohort_365d_2024$death == 1 & cohort_365d_2024$days_follow_up <= 365, na.rm = TRUE), 
+           NA),
+    sum(cohort_100d_2025$death == 1 & cohort_100d_2025$days_follow_up <= 100, na.rm = TRUE),
+    sum(cohort_365d_2025$death == 1 & cohort_365d_2025$days_follow_up <= 365, na.rm = TRUE)
+  ),
+  `TRM Deaths` = c(
+    sum(cohort_100d_2024$trm_death == 1 & cohort_100d_2024$days_follow_up <= 100, na.rm = TRUE),
+    ifelse(nrow(cohort_365d_2024) > 0,
+           sum(cohort_365d_2024$trm_death == 1 & cohort_365d_2024$days_follow_up <= 365, na.rm = TRUE),
+           NA),
+    sum(cohort_100d_2025$trm_death == 1 & cohort_100d_2025$days_follow_up <= 100, na.rm = TRUE),
+    sum(cohort_365d_2025$trm_death == 1 & cohort_365d_2025$days_follow_up <= 365, na.rm = TRUE)
+  )
+)
+
+kable(cohort_breakdown,
+      caption = "Table 13: Cumulative Rolling Cohort Breakdown - Patients and Time Periods") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#8E44AD", color = "white") |>
+  pack_rows("2024 Analysis", 1, 2, label_row_css = "background-color: #3498DB; color: white;") |>
+  pack_rows("2025 Analysis", 3, 4, label_row_css = "background-color: #27AE60; color: white;")
+```
+
+::: {.callout-note}
+## Understanding the Cohort Selection
+
+**How patients are selected:**
+
+- For **100-day analysis**: Patients whose 100-day post-HSCT milestone (HSCT date + 100 days) falls within the milestone date range
+- For **365-day analysis**: Patients whose 365-day post-HSCT milestone (HSCT date + 365 days) falls within the milestone date range
+
+**Example for 2025 100-day cohort:**
+
+- Milestone period: Jul 1, 2024 - Sep 30, 2025
+- This includes patients transplanted approximately Mar 23, 2024 - Jun 22, 2025
+- **`r nrow(cohort_100d_2025)` patients** met these criteria
+
+**Note:** The 2024 365-day cohort has 0 patients because no patients transplanted in the required period (2022-2023) had their 365-day milestone fall within the 2024 reporting window.
+:::
+
+## Rolling Cohort Selection Criteria
+
+```{r methodology-table}
+methodology <- tibble(
+  Timepoint = c("100 days", "365 days"),
+  `Milestone Period (2025)` = c("Jul 1, 2024 - Sep 30, 2025", "Jan 1, 2024 - Dec 31, 2025"),
+  `Milestone Period (2024)` = c("Jul 1, 2023 - Sep 30, 2024", "Jan 1, 2023 - Dec 31, 2024"),
+  Explanation = c(
+    "Patients whose 100-day post-HSCT milestone fell within this period",
+    "Patients whose 365-day post-HSCT milestone fell within this period"
+  )
+)
+
+kable(methodology,
+      caption = "Table 14: Rolling Cohort Selection Methodology") |>
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) |>
+  row_spec(0, bold = TRUE, background = "#34495E", color = "white")
+```
+
+## Key Definitions
+
+**Overall Survival (OS)**: Percentage of patients alive at the specified timepoint. Calculated as:
+$$OS = \frac{\text{Patients Alive at Timepoint}}{\text{Total Patients in Cohort}} \times 100\%$$
+
+**Treatment-Related Mortality (TRM)**: Deaths directly attributed to the transplant procedure and its complications (not disease progression). Calculated as:
+$$TRM = \frac{\text{TRM Deaths at Timepoint}}{\text{Total Patients in Cohort}} \times 100\%$$
+
+---
+
+# Conclusions
+
+## Key Findings
+
+```{r conclusion-summary, results='asis'}
+cat("### 2025 Autologous Transplant Program Performance\n\n")
+
+cat("1. **Overall Survival**\n")
+cat(sprintf("   - 100-day OS: **%s%%** (%d/%d patients)\n", 
+            os_100d_2025$os_pct, os_100d_2025$n_cohort - os_100d_2025$n_deaths, os_100d_2025$n_cohort))
+cat(sprintf("   - 365-day OS: **%s%%** (%d/%d patients)\n\n", 
+            os_365d_2025$os_pct, os_365d_2025$n_cohort - os_365d_2025$n_deaths, os_365d_2025$n_cohort))
+
+cat("2. **Treatment-Related Mortality**\n")
+cat(sprintf("   - 100-day TRM: **%s%%** (%d events)\n", trm_100d_2025$trm_pct, trm_100d_2025$n_trm))
+cat(sprintf("   - 365-day TRM: **%s%%** (%d events)\n\n", trm_365d_2025$trm_pct, trm_365d_2025$n_trm))
+
+cat("3. **Cohort Characteristics**\n")
+cat(sprintf("   - Total evaluable patients: **%d**\n", nrow(auto_evaluable)))
+cat(sprintf("   - Mean age: **%.1f years**\n", age_stats$mean_age))
+cat(sprintf("   - Mean follow-up: **%.1f days** (%.1f months)\n", 
+            followup_stats$mean_fu, followup_stats$mean_fu / 30.44))
+cat(sprintf("   - Primary indication: **Multiple Myeloma** (%.1f%%)\n\n", 
+            100 * sum(auto_evaluable$diagnosis_clean == "Multiple Myeloma (MM)") / nrow(auto_evaluable)))
+
+cat("4. **Data Quality Note**\n")
+cat("   - 1 patient (Rapuano Giuseppe) was lost to follow-up and excluded from analysis\n")
+```
+
+---
+
+*Report generated `r format(Sys.Date(), "%B %d, %Y")` using cumulative rolling cohort methodology per JACIE Italian guidelines*
+
+*OS = Overall Survival; TRM = Treatment-Related Mortality*

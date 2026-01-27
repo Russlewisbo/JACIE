@@ -19,9 +19,6 @@ execute:
   message: false
 ---
 
-::: {.callout-note}
-## AI-Generated Report with Rolling Cohort Methodology
-
 
 ```{r setup}
 library(tidyverse)
